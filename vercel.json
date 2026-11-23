@@ -9,12 +9,8 @@
       "destination": "/api?__vercel_api_path=$1"
     },
     {
-      "source": "/((?!api$|api/).*)",
+      "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
   ]
-}
-{
-"source": "/api/(.*)",
-"destination": "/api?__vercel_api_path=$1"
 }
