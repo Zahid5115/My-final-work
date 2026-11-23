@@ -5,6 +5,7 @@ import { ALL_PERMISSION_KEYS } from '../../src/types/platform.ts';
 import { isEmailServiceConfigured, sendTransactionalEmail } from '../email.ts';
 import {
   createRateLimiter,
+  getBootstrapConfig,
   hashPassword,
   isValidEmail,
   sanitizeText,
@@ -28,7 +29,9 @@ import {
   type AuthenticatedRequest,
   clearSessionCookie,
   ensureSupabaseSystemRoles,
+  extractRoleRelation,
   insertSupabaseAuditLog,
+  loadSupabaseAdminProfile,
   requireAdmin,
   requirePermission,
   resolveAdminFromRequest,
@@ -43,8 +46,9 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
   // ADMIN AUTHENTICATION & ATOMIC FIRST-ADMIN BOOTSTRAP
   // ===========================================================================
   router.get('/admin/auth/status', async (_req, res) => {
-    const bootstrapConfigured = Boolean(process.env.ADMIN_BOOTSTRAP_SECRET?.trim());
-    const requiresBootstrapEmail = Boolean(process.env.ADMIN_BOOTSTRAP_EMAIL?.trim());
+    const bootstrap = getBootstrapConfig();
+    const bootstrapConfigured = bootstrap.secretConfigured;
+    const requiresBootstrapEmail = bootstrap.emailAllowlistConfigured;
     const diag = getSupabaseConfigDiagnostics();
     const supabaseUrlInvalid = diag.urlConfigured && !diag.urlValid;
 
@@ -65,6 +69,7 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
             requiresBootstrapSecret: true,
             requiresBootstrapEmail,
             supabaseUrlInvalid,
+            anonKeyConfigured: diag.anonKeyConfigured,
             supabaseWarning: `Supabase profiles table check returned: ${error.message}`
           });
           return;
@@ -77,7 +82,8 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
           bootstrapConfigured,
           requiresBootstrapSecret: true,
           requiresBootstrapEmail,
-          supabaseUrlInvalid
+          supabaseUrlInvalid,
+          anonKeyConfigured: diag.anonKeyConfigured
         });
         return;
       } catch (err) {
@@ -89,6 +95,7 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
           requiresBootstrapSecret: true,
           requiresBootstrapEmail,
           supabaseUrlInvalid,
+          anonKeyConfigured: diag.anonKeyConfigured,
           supabaseWarning: err instanceof Error ? err.message : 'Unable to reach Supabase.'
         });
         return;
@@ -104,6 +111,7 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
         requiresBootstrapSecret: true,
         requiresBootstrapEmail,
         supabaseUrlInvalid,
+        anonKeyConfigured: diag.anonKeyConfigured,
         productionConfigError:
           'Supabase server credentials (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY) are required in production. Local JSON persistence (data/platform-db.json) is disabled.'
       });
@@ -118,7 +126,8 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
       bootstrapConfigured,
       requiresBootstrapSecret: true,
       requiresBootstrapEmail,
-      supabaseUrlInvalid
+      supabaseUrlInvalid,
+      anonKeyConfigured: diag.anonKeyConfigured
     });
   });
 
@@ -126,10 +135,10 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
     const fullName = sanitizeText(req.body?.fullName, 120);
     const email = sanitizeText(req.body?.email, 254).toLowerCase();
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
-    const bootstrapSecret = sanitizeText(req.body?.bootstrapSecret, 200);
+    const bootstrapSecret = sanitizeText(req.body?.bootstrapSecret, 500);
 
-    const requiredBootstrapSecret = process.env.ADMIN_BOOTSTRAP_SECRET?.trim();
-    if (!requiredBootstrapSecret) {
+    const bootstrap = getBootstrapConfig();
+    if (!bootstrap.secretConfigured) {
       res.status(403).json({
         error:
           'First-admin setup is locked until ADMIN_BOOTSTRAP_SECRET is configured on the server by the project owner.'
@@ -137,15 +146,14 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
       return;
     }
 
-    const providedBuf = Buffer.from(bootstrapSecret);
-    const expectedBuf = Buffer.from(requiredBootstrapSecret);
+    const providedBuf = Buffer.from(bootstrapSecret, 'utf8');
+    const expectedBuf = Buffer.from(bootstrap.secret, 'utf8');
     if (providedBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(providedBuf, expectedBuf)) {
       res.status(403).json({ error: 'Invalid server setup secret.' });
       return;
     }
 
-    const allowedOwnerEmail = process.env.ADMIN_BOOTSTRAP_EMAIL?.trim().toLowerCase();
-    if (allowedOwnerEmail && email !== allowedOwnerEmail) {
+    if (bootstrap.emailAllowlistConfigured && !bootstrap.allowedEmails.includes(email)) {
       res.status(403).json({
         error: 'This email address is not authorized by ADMIN_BOOTSTRAP_EMAIL to claim the initial Super Admin.'
       });
@@ -169,7 +177,7 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
 
         if (countErr) {
           res.status(500).json({
-            error: 'Unable to verify Supabase admin table. Confirm migrations 001–004 have been executed.'
+            error: `Unable to verify Supabase admin table (${countErr.message}). Confirm migrations 001–004 have been executed.`
           });
           return;
         }
@@ -188,23 +196,64 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
           return;
         }
 
+        let userId = '';
+        let createdNewAuthUser = false;
+
         const { data: createdAuth, error: authErr } = await sb.auth.admin.createUser({
           email,
           password,
           email_confirm: true,
           user_metadata: { full_name: fullName }
         });
-        if (authErr || !createdAuth.user) {
-          res.status(400).json({ error: authErr?.message || 'Unable to create Supabase admin user.' });
-          return;
+
+        if (createdAuth?.user && !authErr) {
+          userId = createdAuth.user.id;
+          createdNewAuthUser = true;
+        } else {
+          const alreadyExists =
+            authErr?.message?.toLowerCase().includes('already') ||
+            authErr?.message?.toLowerCase().includes('registered') ||
+            authErr?.status === 422;
+
+          if (alreadyExists) {
+            // If an auth user exists from an unlinked manual signup or prior partial setup while 0 admins exist,
+            // verify ownership via password sign-in before linking them as the first Super Admin.
+            const sbAnon = getSupabaseAnonClient();
+            if (sbAnon) {
+              const { data: existingSignIn, error: existingErr } = await sbAnon.auth.signInWithPassword({
+                email,
+                password
+              });
+              if (!existingErr && existingSignIn.user) {
+                userId = existingSignIn.user.id;
+              }
+            }
+            if (!userId) {
+              res.status(400).json({
+                error:
+                  'A Supabase Authentication user with this email already exists with a different password (or unlinked state). Enter that account’s existing password or remove the unlinked user in Supabase Dashboard → Authentication → Users and retry.'
+              });
+              return;
+            }
+          } else {
+            res.status(400).json({ error: authErr?.message || 'Unable to create Supabase admin user.' });
+            return;
+          }
         }
 
-        const userId = createdAuth.user.id;
+        const rollbackIfNew = async () => {
+          if (createdNewAuthUser && userId) {
+            await sb.auth.admin.deleteUser(userId);
+          }
+        };
+
         const { data: claimed, error: claimErr } = await sb.rpc('claim_first_super_admin', {
           p_user_id: userId,
           p_email: email,
           p_full_name: fullName
         });
+
+        let usedFallbackInsert = false;
 
         if (claimErr) {
           const isMissingRpc =
@@ -213,6 +262,7 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
             claimErr.message.includes('does not exist');
 
           if (isMissingRpc) {
+            usedFallbackInsert = true;
             const now = new Date().toISOString();
             const { error: upsertErr } = await sb.from('profiles').upsert({
               id: userId,
@@ -224,7 +274,7 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
               last_login_at: now
             });
             if (upsertErr) {
-              await sb.auth.admin.deleteUser(userId);
+              await rollbackIfNew();
               res.status(500).json({
                 error: `Failed to assign Super Admin profile in Supabase: ${upsertErr.message}`
               });
@@ -236,36 +286,45 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
               .eq('is_admin', true);
             if ((postCount ?? 0) > 1) {
               await sb.from('profiles').delete().eq('id', userId);
-              await sb.auth.admin.deleteUser(userId);
+              await rollbackIfNew();
               res.status(409).json({
                 error: 'First administrator was claimed concurrently. This one-time setup is permanently locked.'
               });
               return;
             }
           } else {
-            await sb.auth.admin.deleteUser(userId);
+            await rollbackIfNew();
             res.status(500).json({
               error: `Failed to atomically claim Super Admin in Supabase: ${claimErr.message}`
             });
             return;
           }
-        } else if (claimed === false) {
-          await sb.auth.admin.deleteUser(userId);
-          res.status(409).json({
-            error: 'First administrator has already been established. This one-time setup is permanently locked.'
-          });
-          return;
+        } else {
+          const claimRow = Array.isArray(claimed) ? claimed[0] : claimed;
+          const didClaim =
+            typeof claimRow === 'boolean'
+              ? claimRow
+              : Boolean(claimRow && typeof claimRow === 'object' && (claimRow as { claimed?: unknown }).claimed);
+          if (!didClaim) {
+            await rollbackIfNew();
+            res.status(409).json({
+              error: 'First administrator has already been established. This one-time setup is permanently locked.'
+            });
+            return;
+          }
         }
 
-        await insertSupabaseAuditLog(sb, {
-          actorId: userId,
-          actorEmail: email,
-          actorRole: 'Super Admin',
-          action: 'first_admin_claimed',
-          entityType: 'admin_user',
-          entityId: userId,
-          summary: `Initial Super Admin account established atomically for ${email}.`
-        });
+        if (usedFallbackInsert) {
+          await insertSupabaseAuditLog(sb, {
+            actorId: userId,
+            actorEmail: email,
+            actorRole: 'Super Admin',
+            action: 'first_admin_claimed',
+            entityType: 'admin_user',
+            entityId: userId,
+            summary: `Initial Super Admin account established for ${email}.`
+          });
+        }
 
         res.status(201).json({
           setupComplete: true,
@@ -340,6 +399,32 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
     });
   });
 
+  // Finalize & audit a browser-side Supabase sign-in and mirror session in an HttpOnly cookie
+  router.post('/admin/auth/session', requireAdmin, async (req: AuthenticatedRequest, res) => {
+    const authHeader = req.headers.authorization;
+    const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+    const sb = getSupabaseAdminClient();
+    const now = new Date().toISOString();
+
+    if (sb && req.adminUser) {
+      await sb.from('profiles').update({ last_login_at: now }).eq('id', req.adminUser.id);
+      await insertSupabaseAuditLog(sb, {
+        actorId: req.adminUser.id,
+        actorEmail: req.adminUser.email,
+        actorRole: req.adminUser.role,
+        action: 'admin_login',
+        entityType: 'admin_user',
+        entityId: req.adminUser.id,
+        summary: `${req.adminUser.fullName} (${req.adminUser.role}) signed in.`
+      });
+    }
+
+    if (token) {
+      setSessionCookie(req, res, token, 3600);
+    }
+    res.json({ user: { ...req.adminUser!, lastLoginAt: now } });
+  });
+
   router.post('/admin/auth/login', authLimiter, async (req, res) => {
     const email = sanitizeText(req.body?.email, 254).toLowerCase();
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
@@ -365,64 +450,51 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
         password
       });
       if (signInErr || !signInData.session?.access_token || !signInData.user) {
+        const msg = signInErr?.message?.toLowerCase() ?? '';
+        if (msg.includes('email not confirmed')) {
+          res.status(403).json({
+            error: 'Your email address has not been confirmed in Supabase Auth yet. Check your inbox or confirm the user in Supabase Dashboard.'
+          });
+          return;
+        }
         res.status(401).json({ error: 'Invalid email or password.' });
         return;
       }
 
-      const { data: profile } = await sb
-        .from('profiles')
-        .select('id, email, full_name, phone, avatar_url, is_admin, account_status, created_at, admin_roles(id, name)')
-        .eq('id', signInData.user.id)
-        .single();
-
-      if (!profile || !profile.is_admin) {
-        res.status(403).json({ error: 'This account does not have administrator privileges.' });
-        return;
-      }
-      if (profile.account_status !== 'active') {
-        res.status(403).json({ error: 'This administrator account is currently suspended or inactive.' });
+      const profileResult = await loadSupabaseAdminProfile(sb, signInData.user.id, {
+        activateInvitedIfConfirmed: true,
+        authUserConfirmed: true
+      });
+      if (!profileResult.ok) {
+        res.status(profileResult.status).json({ error: profileResult.error });
         return;
       }
 
-      const roleRel = profile.admin_roles as unknown as { id: string; name: AdminRoleName } | null;
-      const roleName: AdminRoleName = roleRel?.name ?? 'Admin';
-      let permissions: PermissionKey[] = [];
-      if (roleName === 'Super Admin') {
-        permissions = [...ALL_PERMISSION_KEYS];
-      } else if (roleRel?.id) {
-        const { data: perms } = await sb
-          .from('role_permissions')
-          .select('permission_key, allowed')
-          .eq('role_id', roleRel.id)
-          .eq('allowed', true);
-        permissions = (perms ?? []).map((p) => p.permission_key as PermissionKey);
-      }
-
+      const user = profileResult.user;
       const now = new Date().toISOString();
-      await sb.from('profiles').update({ last_login_at: now }).eq('id', profile.id);
+      await sb.from('profiles').update({ last_login_at: now }).eq('id', user.id);
       await insertSupabaseAuditLog(sb, {
-        actorId: profile.id,
-        actorEmail: profile.email,
-        actorRole: roleName,
+        actorId: user.id,
+        actorEmail: user.email,
+        actorRole: user.role,
         action: 'admin_login',
         entityType: 'admin_user',
-        entityId: profile.id,
-        summary: `${profile.full_name} (${roleName}) signed in.`
+        entityId: user.id,
+        summary: `${user.fullName} (${user.role}) signed in.`
       });
+
+      setSessionCookie(
+        req,
+        res,
+        signInData.session.access_token,
+        signInData.session.expires_in ?? 3600
+      );
 
       res.json({
         token: signInData.session.access_token,
         user: {
-          id: profile.id,
-          email: profile.email,
-          fullName: profile.full_name,
-          phone: profile.phone ?? '',
-          avatarUrl: profile.avatar_url ?? '',
-          role: roleName,
-          accountStatus: profile.account_status,
-          permissions,
-          lastLoginAt: now,
-          createdAt: profile.created_at
+          ...user,
+          lastLoginAt: now
         }
       });
       return;
@@ -733,7 +805,7 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
       }
 
       const items = (profileRows ?? []).map((p) => {
-        const roleRel = p.admin_roles as unknown as { id: string; name: AdminRoleName } | null;
+        const roleRel = extractRoleRelation(p.admin_roles);
         const roleName: AdminRoleName = roleRel?.name ?? 'Admin';
         const perms =
           roleName === 'Super Admin'
@@ -816,6 +888,7 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
 
       const baseUrl = process.env.APP_URL?.trim() || `${req.protocol}://${req.get('host')}`;
       let userId = existingProfile?.id ?? '';
+      let createdNewAuthUser = false;
       let accountStatus: 'active' | 'invited' = 'active';
 
       if (!userId) {
@@ -825,10 +898,16 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
             redirectTo: `${baseUrl.replace(/\/$/, '')}/admin/reset-password`
           });
           if (inviteErr || !invited.user) {
-            res.status(400).json({ error: inviteErr?.message || 'Unable to send Supabase invitation email.' });
+            const msg = inviteErr?.message || 'Unable to send Supabase invitation email.';
+            res.status(400).json({
+              error: msg.toLowerCase().includes('already')
+                ? 'A user with this email already exists in Supabase Auth without an admin profile. Remove the unlinked user in Supabase Authentication or create directly.'
+                : msg
+            });
             return;
           }
           userId = invited.user.id;
+          createdNewAuthUser = true;
           accountStatus = 'invited';
         } else {
           const { data: created, error: createErr } = await sb.auth.admin.createUser({
@@ -838,10 +917,16 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
             user_metadata: { full_name: fullName }
           });
           if (createErr || !created.user) {
-            res.status(400).json({ error: createErr?.message || 'Unable to create Supabase user.' });
+            const msg = createErr?.message || 'Unable to create Supabase user.';
+            res.status(400).json({
+              error: msg.toLowerCase().includes('already')
+                ? 'A user with this email already exists in Supabase Auth without an admin profile. Remove the unlinked user in Supabase Authentication before re-adding.'
+                : msg
+            });
             return;
           }
           userId = created.user.id;
+          createdNewAuthUser = true;
           accountStatus = 'active';
         }
       }
@@ -857,6 +942,9 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
       });
 
       if (upsertErr) {
+        if (createdNewAuthUser) {
+          await sb.auth.admin.deleteUser(userId);
+        }
         res.status(500).json({ error: `Unable to save administrator profile: ${upsertErr.message}` });
         return;
       }
@@ -976,7 +1064,7 @@ export function registerAuthAndUsersRoutes(router: express.Router): void {
         return;
       }
 
-      const currentRoleRel = target.admin_roles as unknown as { id: string; name: AdminRoleName } | null;
+      const currentRoleRel = extractRoleRelation(target.admin_roles);
       const currentRoleName: AdminRoleName = currentRoleRel?.name ?? 'Admin';
       const roles = await ensureSupabaseSystemRoles(sb);
 

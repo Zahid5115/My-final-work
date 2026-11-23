@@ -51,12 +51,12 @@ Open **Settings → Secrets** in Google AI Studio (or your server `.env` file) a
 | --- | --- | --- |
 | `SUPABASE_URL` | Server-only | `https://yourprojectref.supabase.co` *(must start with `https://`)* |
 | `VITE_SUPABASE_URL` | Client & Server | Same full URL: `https://yourprojectref.supabase.co` |
-| `VITE_SUPABASE_ANON_KEY` | Client (Public) | Your Supabase `anon` public key |
+| `VITE_SUPABASE_ANON_KEY` | Client (Public) | Your Supabase `anon` public key *(required for password login & recovery)* |
 | `SUPABASE_SERVICE_ROLE_KEY` | **Server-only Secret** | Your Supabase `service_role` key |
 | `ADMIN_BOOTSTRAP_SECRET` | **Server-only Secret** | A private one-time setup passphrase you invent |
 | `ADMIN_BOOTSTRAP_EMAIL` | **Server-only** | Your owner email address (e.g., `owner@yourdomain.com`) |
 
-> **Important**: Always enter the full `https://...` URL in `SUPABASE_URL` and `VITE_SUPABASE_URL` (no surrounding quotes, and not just the project ID). If the URL is malformed, the portal stays in Local Server Mode and displays a **Supabase URL Secret Format Notice** on `/admin/setup` instead of writing to Supabase.
+> **Important**: Always enter the full `https://...` URL in `SUPABASE_URL` and `VITE_SUPABASE_URL` (not just the project ID). Surrounding quotes are automatically trimmed, and if `SUPABASE_URL` is omitted the server falls back to `VITE_SUPABASE_URL`. If the URL is malformed, the portal stays in Local Server Mode and displays a **Supabase URL Secret Format Notice** on `/admin/setup` instead of writing to Supabase.
 
 Save your secrets and restart/reload the dev server so the environment picks them up.
 
@@ -81,7 +81,7 @@ Behind the scenes, the backend (`POST /api/admin/auth/setup-first-admin`):
 - Creates a confirmed user in **`auth.users`**.
 - Calls the atomic PostgreSQL function **`public.claim_first_super_admin()`** (protected by a transaction-level advisory lock `pg_advisory_xact_lock`) so concurrent requests cannot race. If another request already claimed the first admin, the backend rolls back the Auth user and rejects with `409 Conflict`.
 - Inserts a `first_admin_claimed` entry into **`public.admin_activity_logs`**.
-- Signs you in and redirects to `/admin/dashboard`.
+- Signs you in, mirrors the session in an `HttpOnly` cookie, and redirects to `/admin/dashboard`.
 
 ### Option B: Server Terminal CLI (`npm run bootstrap:admin`)
 
@@ -173,6 +173,7 @@ LIMIT 10;
    - `Operations Manager`
    - `Vendor Manager`
    - `Support Manager`
+   - Email-invited accounts stay `invited` until the user sets their password via the email link, then automatically activate to `active` on first confirmed sign-in.
 3. **Clean Up (Optional)**: Once verified, you can keep or remove `ADMIN_BOOTSTRAP_SECRET` from Secrets—the setup endpoint remains permanently locked regardless because `public.profiles` now contains an active admin.
 
 ---
@@ -182,7 +183,9 @@ LIMIT 10;
 | Message / Symptom | Cause | Fix |
 | --- | --- | --- |
 | Badge says `Local Server Mode` & shows `Supabase URL Secret Format Notice` | `SUPABASE_URL` or `VITE_SUPABASE_URL` is empty or missing `https://` | Paste your full `https://<project-ref>.supabase.co` URL into Secrets and restart |
-| `First-admin setup is locked until ADMIN_BOOTSTRAP_SECRET is configured` | `ADMIN_BOOTSTRAP_SECRET` is missing in server Secrets | Add `ADMIN_BOOTSTRAP_SECRET` in Secrets and click **Re-check Setup Status** |
-| `Invalid server setup secret` (`403`) | Entered passphrase doesn't match `ADMIN_BOOTSTRAP_SECRET` | Re-enter exact secret value (check for extra spaces) |
+| `First-admin setup is locked until ADMIN_BOOTSTRAP_SECRET is configured` (`403`) | `ADMIN_BOOTSTRAP_SECRET` is missing in server Secrets | Add `ADMIN_BOOTSTRAP_SECRET` in Secrets and click **Re-check Setup Status** |
+| `Invalid server setup secret` (`403`) | Entered passphrase doesn't match `ADMIN_BOOTSTRAP_SECRET` | Re-enter exact secret value configured on the server |
 | `This email address is not authorized by ADMIN_BOOTSTRAP_EMAIL` (`403`) | Submitted email differs from `ADMIN_BOOTSTRAP_EMAIL` | Use the exact email configured in `ADMIN_BOOTSTRAP_EMAIL` |
-| `Unable to verify Supabase admin table` (`500`) | Migrations `001`–`003` have not been run in Supabase SQL Editor | Run `001_initial_schema.sql`, `002_rls_and_storage.sql`, and `003_seed_demo_data.sql` |
+| `401 Authentication required` or session drops on reload | Browser session expired, or `VITE_SUPABASE_ANON_KEY` / `SUPABASE_ANON_KEY` is missing | Ensure `VITE_SUPABASE_ANON_KEY` is set, restart dev server, and sign in at `/admin/login` |
+| `Authenticated in Supabase, but no administrator profile exists` (`403`) | User exists in `auth.users` without a `profiles` row | If no admin exists yet, complete `/admin/setup` with that account's password; otherwise ask a Super Admin to add the user in **Admin Users** |
+| `Unable to verify Supabase admin table` (`500`) or RLS violation errors | Migrations `001`–`004` were not run in Supabase SQL Editor, or `SUPABASE_SERVICE_ROLE_KEY` is actually the `anon` key | Run `001_initial_schema.sql` through `004_security_rls_and_atomic_bootstrap.sql` in SQL Editor and verify `SUPABASE_SERVICE_ROLE_KEY` is your `service_role` secret |

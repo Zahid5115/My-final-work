@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -11,7 +11,11 @@ import {
   UserPlus
 } from 'lucide-react';
 import { useAdminAuth } from '../hooks/useAdminAuth';
-import { isBrowserSupabaseUrlInvalid } from '../../lib/supabase/client';
+import {
+  getSupabaseBrowserClient,
+  isBrowserSupabaseConfigured,
+  isBrowserSupabaseUrlInvalid
+} from '../../lib/supabase/client';
 import { apiRequest } from '../../services/api';
 
 export const AdminLoginPage: React.FC<{ mode?: 'login' | 'setup' | 'forgot' | 'reset' }> = ({
@@ -27,10 +31,30 @@ export const AdminLoginPage: React.FC<{ mode?: 'login' | 'setup' | 'forgot' | 'r
   const [confirmPassword, setConfirmPassword] = useState('');
   const [bootstrapSecret, setBootstrapSecret] = useState('');
   const [resetToken, setResetToken] = useState(searchParams.get('token') || '');
+  const [supabaseRecoveryReady, setSupabaseRecoveryReady] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [rechecking, setRechecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (mode !== 'reset' || !isBrowserSupabaseConfigured) return;
+    const sb = getSupabaseBrowserClient();
+    if (!sb) return;
+
+    void sb.auth.getSession().then(({ data }) => {
+      if (data.session) {
+        setSupabaseRecoveryReady(true);
+      }
+    });
+
+    const { data: listener } = sb.auth.onAuthStateChange((event, session) => {
+      if ((event === 'PASSWORD_RECOVERY' || event === 'SIGNED_IN') && session) {
+        setSupabaseRecoveryReady(true);
+      }
+    });
+    return () => listener.subscription.unsubscribe();
+  }, [mode]);
 
   if (!loading && user && (mode === 'login' || mode === 'setup')) {
     return <Navigate to="/admin/dashboard" replace />;
@@ -128,6 +152,22 @@ export const AdminLoginPage: React.FC<{ mode?: 'login' | 'setup' | 'forgot' | 'r
     }
     setSubmitting(true);
     try {
+      if (authStatus?.authMode === 'supabase') {
+        const sb = getSupabaseBrowserClient();
+        if (!sb) {
+          throw new Error(
+            'Supabase client credentials (VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY) are required to complete email password recovery.'
+          );
+        }
+        const { error: updErr } = await sb.auth.updateUser({ password });
+        if (updErr) {
+          throw new Error(updErr.message || 'Recovery session expired. Request a new password reset link.');
+        }
+        await refreshAuth();
+        setInfoMessage('Password updated in Supabase. You can now sign in to the Admin Portal.');
+        return;
+      }
+
       const res = await apiRequest<{ message: string }>('/api/admin/auth/reset-password', {
         method: 'POST',
         body: JSON.stringify({ token: resetToken, newPassword: password }),
@@ -268,7 +308,7 @@ export const AdminLoginPage: React.FC<{ mode?: 'login' | 'setup' | 'forgot' | 'r
                     <em>(Recommended)</em> Add <code className="rounded bg-black/5 px-1.5 py-0.5 font-mono font-semibold dark:bg-white/10">ADMIN_BOOTSTRAP_EMAIL</code> set to your personal/work email so only your email is accepted.
                   </li>
                   <li>
-                    <em>(For Supabase Cloud DB &amp; Auth)</em> Also set <code className="font-mono">SUPABASE_URL</code>, <code className="font-mono">SUPABASE_SERVICE_ROLE_KEY</code>, <code className="font-mono">VITE_SUPABASE_URL</code>, and <code className="font-mono">VITE_SUPABASE_ANON_KEY</code>, then run the 3 SQL migrations in <code className="font-mono">supabase/migrations/</code>.
+                    <em>(For Supabase Cloud DB &amp; Auth)</em> Also set <code className="font-mono">SUPABASE_URL</code>, <code className="font-mono">SUPABASE_SERVICE_ROLE_KEY</code>, <code className="font-mono">VITE_SUPABASE_URL</code>, and <code className="font-mono">VITE_SUPABASE_ANON_KEY</code>, then run all 4 SQL migrations in <code className="font-mono">supabase/migrations/</code>.
                   </li>
                   <li>
                     Save secrets and click <strong>Re-check Setup Status</strong> below (or run <code className="font-mono">npm run bootstrap:admin</code> in the server terminal).
@@ -453,19 +493,37 @@ export const AdminLoginPage: React.FC<{ mode?: 'login' | 'setup' | 'forgot' | 'r
             </form>
           ) : mode === 'reset' ? (
             <form onSubmit={handleResetPassword} className="mt-5 space-y-4">
-              <div>
-                <label htmlFor="reset-token" className="block text-xs font-semibold">
-                  Reset Token *
-                </label>
-                <input
-                  id="reset-token"
-                  type="text"
-                  required
-                  value={resetToken}
-                  onChange={(e) => setResetToken(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-emerald-950/20 bg-white px-3 py-2 font-mono-tabular text-sm text-[#052E16] dark:border-lime-300/25 dark:bg-[#041A0E] dark:text-lime-100"
-                />
-              </div>
+              {authStatus?.authMode === 'supabase' ? (
+                <div className="rounded-lg border border-emerald-950/15 bg-[#F6FAF1] p-3 text-xs leading-relaxed dark:border-lime-300/20 dark:bg-[#041A0E]">
+                  {supabaseRecoveryReady ? (
+                    <p className="font-semibold text-emerald-800 dark:text-lime-300">
+                      Supabase recovery session verified. Choose your new administrator password below.
+                    </p>
+                  ) : (
+                    <p className="opacity-85">
+                      Open the recovery link sent to your email address to activate your Supabase reset session, or{' '}
+                      <Link to="/admin/forgot-password" className="font-semibold underline">
+                        request a new reset link
+                      </Link>
+                      .
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div>
+                  <label htmlFor="reset-token" className="block text-xs font-semibold">
+                    Reset Token *
+                  </label>
+                  <input
+                    id="reset-token"
+                    type="text"
+                    required
+                    value={resetToken}
+                    onChange={(e) => setResetToken(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-emerald-950/20 bg-white px-3 py-2 font-mono-tabular text-sm text-[#052E16] dark:border-lime-300/25 dark:bg-[#041A0E] dark:text-lime-100"
+                  />
+                </div>
+              )}
               <div>
                 <label htmlFor="reset-pass" className="block text-xs font-semibold">
                   New Password (min 10 chars) *

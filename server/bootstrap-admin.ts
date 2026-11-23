@@ -2,8 +2,9 @@ import 'dotenv/config';
 import crypto from 'node:crypto';
 import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
-import { hashPassword, isValidEmail, sanitizeText } from './security.ts';
-import { DEFAULT_ROLES, appendActivityLog, getDbState, saveDbState } from './store.ts';
+import { ensureSupabaseSystemRoles } from './routes/shared.ts';
+import { getBootstrapConfig, hashPassword, isValidEmail, sanitizeText } from './security.ts';
+import { appendActivityLog, getDbState, saveDbState } from './store.ts';
 import { getSupabaseAdminClient, isProductionEnvironment } from './supabaseAdmin.ts';
 
 function getArgValue(flag: string): string {
@@ -57,9 +58,9 @@ async function runBootstrap(): Promise<void> {
       process.exit(1);
     }
 
-    const allowedEmail = process.env.ADMIN_BOOTSTRAP_EMAIL?.trim().toLowerCase();
-    if (allowedEmail && email !== allowedEmail) {
-      console.error(`Email must match ADMIN_BOOTSTRAP_EMAIL (${allowedEmail}).`);
+    const bootstrapConfig = getBootstrapConfig();
+    if (bootstrapConfig.emailAllowlistConfigured && !bootstrapConfig.allowedEmails.includes(email)) {
+      console.error(`Email must match ADMIN_BOOTSTRAP_EMAIL (${bootstrapConfig.allowedEmails.join(', ')}).`);
       process.exit(1);
     }
 
@@ -73,6 +74,13 @@ async function runBootstrap(): Promise<void> {
     }
 
     if (sb) {
+      const roles = await ensureSupabaseSystemRoles(sb);
+      const superRole = roles.find((r) => r.name === 'Super Admin');
+      if (!superRole) {
+        console.error('Failed to ensure Super Admin role in admin_roles.');
+        process.exit(1);
+      }
+
       const { data: created, error: createErr } = await sb.auth.admin.createUser({
         email,
         password,
@@ -90,8 +98,12 @@ async function runBootstrap(): Promise<void> {
         p_full_name: fullName
       });
 
-      if (!rpcErr && Array.isArray(claimRows) && claimRows.length > 0) {
-        if (!claimRows[0].claimed) {
+      if (!rpcErr) {
+        const claimRow = Array.isArray(claimRows) ? claimRows[0] : claimRows;
+        const didClaim = Boolean(
+          claimRow && typeof claimRow === 'object' && (claimRow as { claimed?: unknown }).claimed
+        );
+        if (!didClaim) {
           await sb.auth.admin.deleteUser(created.user.id);
           console.error('Aborted: Another process claimed the first Super Admin concurrently.');
           process.exit(1);
@@ -100,32 +112,18 @@ async function runBootstrap(): Promise<void> {
         return;
       }
 
-      // Fallback if migration 004 has not yet been applied
-      let { data: superRole } = await sb
-        .from('admin_roles')
-        .select('id')
-        .eq('name', 'Super Admin')
-        .maybeSingle();
+      const isMissingRpc =
+        rpcErr.code === 'PGRST202' ||
+        rpcErr.message.includes('claim_first_super_admin') ||
+        rpcErr.message.includes('does not exist');
 
-      if (!superRole) {
-        for (const def of DEFAULT_ROLES) {
-          const { data: upserted } = await sb
-            .from('admin_roles')
-            .upsert({ name: def.role, description: def.description, is_system: true }, { onConflict: 'name' })
-            .select('id, name')
-            .single();
-          if (upserted?.name === 'Super Admin') {
-            superRole = { id: upserted.id };
-          }
-        }
-      }
-
-      if (!superRole) {
+      if (!isMissingRpc) {
         await sb.auth.admin.deleteUser(created.user.id);
-        console.error('Failed to resolve Super Admin role in admin_roles.');
+        console.error('Failed to claim first Super Admin via Supabase RPC:', rpcErr.message);
         process.exit(1);
       }
 
+      // Fallback only if migration 004 has not yet been applied
       const { error: profErr } = await sb.from('profiles').upsert({
         id: created.user.id,
         email,

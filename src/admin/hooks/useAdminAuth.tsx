@@ -16,6 +16,7 @@ interface AuthStatusResponse {
   requiresBootstrapSecret: boolean;
   requiresBootstrapEmail: boolean;
   supabaseUrlInvalid?: boolean;
+  anonKeyConfigured?: boolean;
   supabaseWarning?: string;
   productionConfigError?: string;
 }
@@ -87,27 +88,63 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   useEffect(() => {
     setUnauthorizedHandler(handleUnauthorized);
     void refreshAuth();
-    return () => setUnauthorizedHandler(null);
+
+    let unsubscribe: (() => void) | undefined;
+    if (isBrowserSupabaseConfigured) {
+      const sb = getSupabaseBrowserClient();
+      if (sb) {
+        const { data } = sb.auth.onAuthStateChange((event, session) => {
+          if (event === 'SIGNED_OUT') {
+            setInMemoryAuthToken(null);
+            setUser(null);
+          } else if (session?.access_token) {
+            setInMemoryAuthToken(session.access_token);
+          }
+        });
+        unsubscribe = () => data.subscription.unsubscribe();
+      }
+    }
+
+    return () => {
+      setUnauthorizedHandler(null);
+      unsubscribe?.();
+    };
   }, [handleUnauthorized, refreshAuth]);
 
   const login = useCallback(
     async (email: string, password: string) => {
+      const normalizedEmail = email.trim().toLowerCase();
+
       if (isBrowserSupabaseConfigured && authStatus?.authMode === 'supabase') {
         const sb = getSupabaseBrowserClient();
         if (!sb) throw new Error('Supabase client is not initialized.');
-        const { data, error } = await sb.auth.signInWithPassword({ email, password });
+        const { data, error } = await sb.auth.signInWithPassword({
+          email: normalizedEmail,
+          password
+        });
         if (error || !data.session?.access_token) {
-          throw new Error(error?.message || 'Invalid login credentials.');
+          throw new Error(error?.message || 'Invalid email or password.');
         }
+
         setInMemoryAuthToken(data.session.access_token);
-        const me = await apiRequest<{ user: AdminUserProfile }>('/api/admin/auth/me');
-        setUser(me.user);
-        return;
+        try {
+          const sessionRes = await apiRequest<{ user: AdminUserProfile }>('/api/admin/auth/session', {
+            method: 'POST',
+            skipUnauthorizedCallback: true
+          });
+          setUser(sessionRes.user);
+          return;
+        } catch (err) {
+          await sb.auth.signOut();
+          setInMemoryAuthToken(null);
+          setUser(null);
+          throw err;
+        }
       }
 
       const res = await apiRequest<{ token: string; user: AdminUserProfile }>('/api/admin/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: normalizedEmail, password }),
         skipUnauthorizedCallback: true
       });
       setInMemoryAuthToken(res.token);
@@ -130,7 +167,11 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         authMode?: 'supabase' | 'local';
       }>('/api/admin/auth/setup-first-admin', {
         method: 'POST',
-        body: JSON.stringify(params),
+        body: JSON.stringify({
+          ...params,
+          email: params.email.trim().toLowerCase(),
+          bootstrapSecret: params.bootstrapSecret?.trim()
+        }),
         skipUnauthorizedCallback: true
       });
 

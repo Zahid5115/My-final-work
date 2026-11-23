@@ -6,8 +6,35 @@ import type { NextFunction, Request, Response } from 'express';
 const EPHEMERAL_SECRET = crypto.randomBytes(32).toString('hex');
 
 function getSigningSecret(): string {
-  const envSecret = process.env.SESSION_SECRET?.trim();
+  const envSecret = cleanEnvValue(process.env.SESSION_SECRET);
   return envSecret && envSecret.length >= 16 ? envSecret : EPHEMERAL_SECRET;
+}
+
+export function cleanEnvValue(raw: string | undefined): string {
+  if (!raw) return '';
+  const trimmed = raw.trim();
+  const wrapped = trimmed.match(/^(['"])([\s\S]*)\1$/);
+  return (wrapped ? wrapped[2] : trimmed).trim();
+}
+
+export function getBootstrapConfig(): {
+  secret: string;
+  secretConfigured: boolean;
+  allowedEmails: string[];
+  emailAllowlistConfigured: boolean;
+} {
+  const secret = cleanEnvValue(process.env.ADMIN_BOOTSTRAP_SECRET);
+  const rawEmail = cleanEnvValue(process.env.ADMIN_BOOTSTRAP_EMAIL);
+  const allowedEmails = rawEmail
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  return {
+    secret,
+    secretConfigured: Boolean(secret),
+    allowedEmails,
+    emailAllowlistConfigured: allowedEmails.length > 0
+  };
 }
 
 export function hashPassword(password: string): string {
@@ -134,7 +161,8 @@ export function parseCookieHeader(cookieHeader: string | undefined): Record<stri
 export function verifyMutationOrigin(req: Request): boolean {
   // Custom header verification or same-host origin check for cookie-authenticated mutations
   const xRequestedWith = req.headers['x-requested-with'];
-  if (xRequestedWith === 'XMLHttpRequest') return true;
+  const headerVal = Array.isArray(xRequestedWith) ? xRequestedWith[0] : xRequestedWith;
+  if (typeof headerVal === 'string' && headerVal.toLowerCase() === 'xmlhttprequest') return true;
   const origin = req.headers.origin;
   const host = (req.headers['x-forwarded-host'] as string | undefined) || req.headers.host;
   if (origin && host) {

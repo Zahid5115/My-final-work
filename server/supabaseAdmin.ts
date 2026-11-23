@@ -1,10 +1,11 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { cleanEnvValue } from './security.ts';
 
 let cachedSupabaseAdmin: SupabaseClient | null = null;
+let cachedSupabaseKey = '';
 
 export function normalizeSupabaseUrl(raw: string | undefined): string | null {
-  if (!raw) return null;
-  let cleaned = raw.trim().replace(/^['"]+|['"]+$/g, '').trim();
+  let cleaned = cleanEnvValue(raw);
   if (!cleaned) return null;
 
   // Support bare Supabase project hostname if user omitted https://
@@ -23,8 +24,8 @@ export function normalizeSupabaseUrl(raw: string | undefined): string | null {
   return null;
 }
 
-function cleanSecretValue(raw: string | undefined): string {
-  return raw ? raw.trim().replace(/^['"]+|['"]+$/g, '').trim() : '';
+function getRawServerSupabaseUrl(): string | undefined {
+  return process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 }
 
 export function getSupabaseConfigDiagnostics(): {
@@ -33,13 +34,13 @@ export function getSupabaseConfigDiagnostics(): {
   serviceKeyConfigured: boolean;
   anonKeyConfigured: boolean;
 } {
-  const rawUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const rawUrl = getRawServerSupabaseUrl();
   const normalized = normalizeSupabaseUrl(rawUrl);
-  const serviceKey = cleanSecretValue(process.env.SUPABASE_SERVICE_ROLE_KEY);
-  const anonKey = cleanSecretValue(process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY);
+  const serviceKey = cleanEnvValue(process.env.SUPABASE_SERVICE_ROLE_KEY);
+  const anonKey = cleanEnvValue(process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY);
 
   return {
-    urlConfigured: Boolean(cleanSecretValue(rawUrl)),
+    urlConfigured: Boolean(cleanEnvValue(rawUrl)),
     urlValid: Boolean(normalized),
     serviceKeyConfigured: Boolean(serviceKey),
     anonKeyConfigured: Boolean(anonKey)
@@ -55,8 +56,8 @@ export function isProductionEnvironment(): boolean {
 }
 
 export function isServerSupabaseConfigured(): boolean {
-  const url = normalizeSupabaseUrl(process.env.SUPABASE_URL);
-  const serviceKey = cleanSecretValue(process.env.SUPABASE_SERVICE_ROLE_KEY);
+  const url = normalizeSupabaseUrl(getRawServerSupabaseUrl());
+  const serviceKey = cleanEnvValue(process.env.SUPABASE_SERVICE_ROLE_KEY);
   return Boolean(url && serviceKey);
 }
 
@@ -69,11 +70,12 @@ export function assertProductionPersistence(): void {
 }
 
 export function getSupabaseAdminClient(): SupabaseClient | null {
-  const url = normalizeSupabaseUrl(process.env.SUPABASE_URL);
-  const serviceKey = cleanSecretValue(process.env.SUPABASE_SERVICE_ROLE_KEY);
+  const url = normalizeSupabaseUrl(getRawServerSupabaseUrl());
+  const serviceKey = cleanEnvValue(process.env.SUPABASE_SERVICE_ROLE_KEY);
   if (!url || !serviceKey) return null;
 
-  if (!cachedSupabaseAdmin) {
+  const cacheKey = `${url}|${serviceKey}`;
+  if (!cachedSupabaseAdmin || cachedSupabaseKey !== cacheKey) {
     try {
       cachedSupabaseAdmin = createClient(url, serviceKey, {
         auth: {
@@ -81,6 +83,7 @@ export function getSupabaseAdminClient(): SupabaseClient | null {
           persistSession: false
         }
       });
+      cachedSupabaseKey = cacheKey;
     } catch {
       return null;
     }
@@ -89,8 +92,8 @@ export function getSupabaseAdminClient(): SupabaseClient | null {
 }
 
 export function getSupabaseAnonClient(): SupabaseClient | null {
-  const url = normalizeSupabaseUrl(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL);
-  const anonKey = cleanSecretValue(process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY);
+  const url = normalizeSupabaseUrl(getRawServerSupabaseUrl());
+  const anonKey = cleanEnvValue(process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY);
   if (!url || !anonKey) return null;
 
   try {

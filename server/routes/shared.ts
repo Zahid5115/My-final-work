@@ -124,6 +124,7 @@ export async function ensureSupabaseSystemRoles(
     });
   }
 
+  const newlyCreatedRoles = new Set<string>();
   for (const def of DEFAULT_ROLES) {
     if (!byName.has(def.role)) {
       const { data: inserted } = await sb
@@ -135,22 +136,35 @@ export async function ensureSupabaseSystemRoles(
         .select('id, name, description')
         .single();
       if (inserted) {
+        newlyCreatedRoles.add(def.role);
         byName.set(def.role, {
           id: inserted.id,
           name: inserted.name as AdminRoleName,
           description: inserted.description ?? def.description
         });
-        if (def.permissions.length > 0) {
-          await sb.from('role_permissions').upsert(
-            def.permissions.map((perm) => ({
-              role_id: inserted.id,
-              permission_key: perm,
-              allowed: true
-            })),
-            { onConflict: 'role_id,permission_key' }
-          );
-        }
       }
+    }
+  }
+
+  // If role_permissions has zero rows (e.g., 003_seed_demo_data.sql wasn't executed), seed all defaults.
+  // Otherwise, only seed permissions for any system roles that were just created.
+  const { count: totalPermRows } = await sb
+    .from('role_permissions')
+    .select('id', { count: 'exact', head: true });
+  const shouldSeedAllDefaults = (totalPermRows ?? 0) === 0;
+
+  for (const def of DEFAULT_ROLES) {
+    const roleRow = byName.get(def.role);
+    if (!roleRow || def.permissions.length === 0) continue;
+    if (shouldSeedAllDefaults || newlyCreatedRoles.has(def.role)) {
+      await sb.from('role_permissions').upsert(
+        def.permissions.map((perm) => ({
+          role_id: roleRow.id,
+          permission_key: perm,
+          allowed: true
+        })),
+        { onConflict: 'role_id,permission_key' }
+      );
     }
   }
 
@@ -184,13 +198,18 @@ export async function insertSupabaseAuditLog(
   }
 }
 
-export function setSessionCookie(req: Request, res: Response, token: string): void {
+export function setSessionCookie(
+  req: Request,
+  res: Response,
+  token: string,
+  maxAgeSeconds = 60 * 60 * 12
+): void {
   const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
   const parts = [
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
     'Path=/',
     'HttpOnly',
-    `Max-Age=${60 * 60 * 12}`
+    `Max-Age=${Math.max(60, Math.floor(maxAgeSeconds))}`
   ];
   if (isHttps) {
     parts.push('Secure', 'SameSite=None', 'Partitioned');
@@ -211,9 +230,161 @@ export function clearSessionCookie(req: Request, res: Response): void {
   res.setHeader('Set-Cookie', parts.join('; '));
 }
 
-export async function resolveAdminFromRequest(
+export function extractRoleRelation(
+  rawRel: unknown
+): { id: string; name: AdminRoleName } | null {
+  if (!rawRel) return null;
+  const candidate = Array.isArray(rawRel) ? rawRel[0] : rawRel;
+  if (candidate && typeof candidate === 'object' && 'id' in candidate && 'name' in candidate) {
+    return candidate as { id: string; name: AdminRoleName };
+  }
+  return null;
+}
+
+export type AdminResolutionResult =
+  | { ok: true; user: AdminUserProfile; jti?: string }
+  | { ok: false; status: 401 | 403 | 500; error: string };
+
+export async function loadSupabaseAdminProfile(
+  sb: SupabaseAdminClient,
+  userId: string,
+  options?: { activateInvitedIfConfirmed?: boolean; authUserConfirmed?: boolean }
+): Promise<AdminResolutionResult> {
+  const { data: profile, error: profErr } = await sb
+    .from('profiles')
+    .select(
+      'id, email, full_name, phone, avatar_url, role_id, is_admin, account_status, last_login_at, created_at, admin_roles(id, name)'
+    )
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (profErr) {
+    return {
+      ok: false,
+      status: 500,
+      error: `Unable to verify administrator profile in Supabase: ${profErr.message}`
+    };
+  }
+
+  if (!profile) {
+    return {
+      ok: false,
+      status: 403,
+      error:
+        'Authenticated in Supabase, but no administrator profile exists for this account yet. Ask a Super Admin to add you under Admin Users or complete First Super Admin Setup.'
+    };
+  }
+
+  if (!profile.is_admin) {
+    return {
+      ok: false,
+      status: 403,
+      error: 'This account does not have administrator privileges.'
+    };
+  }
+
+  let accountStatus = profile.account_status as 'active' | 'suspended' | 'invited';
+  if (accountStatus === 'suspended') {
+    return {
+      ok: false,
+      status: 403,
+      error: 'This administrator account is currently suspended.'
+    };
+  }
+
+  if (accountStatus === 'invited') {
+    if (options?.activateInvitedIfConfirmed && options?.authUserConfirmed) {
+      await sb
+        .from('profiles')
+        .update({ account_status: 'active', last_login_at: new Date().toISOString() })
+        .eq('id', profile.id);
+      accountStatus = 'active';
+    } else {
+      return {
+        ok: false,
+        status: 403,
+        error: 'This administrator invitation has not been activated yet. Use your invite link to set your password first.'
+      };
+    }
+  }
+
+  if (accountStatus !== 'active') {
+    return {
+      ok: false,
+      status: 403,
+      error: 'This administrator account is currently inactive.'
+    };
+  }
+
+  let roleRel = extractRoleRelation(profile.admin_roles);
+  if (!roleRel && profile.role_id) {
+    const { data: roleRow } = await sb
+      .from('admin_roles')
+      .select('id, name')
+      .eq('id', profile.role_id)
+      .maybeSingle();
+    if (roleRow) {
+      roleRel = { id: roleRow.id, name: roleRow.name as AdminRoleName };
+    }
+  }
+
+  if (!roleRel) {
+    return {
+      ok: false,
+      status: 403,
+      error: 'No valid administrator role is assigned to this account.'
+    };
+  }
+
+  const roleName = roleRel.name;
+  let permissions: PermissionKey[] = [];
+  if (roleName === 'Super Admin') {
+    permissions = [...ALL_PERMISSION_KEYS];
+  } else {
+    const { data: perms } = await sb
+      .from('role_permissions')
+      .select('permission_key, allowed')
+      .eq('role_id', roleRel.id)
+      .eq('allowed', true);
+    permissions = (perms ?? []).map((p) => p.permission_key as PermissionKey);
+
+    // If role_permissions has zero rows across the whole database (e.g. migration 003 not run), seed defaults
+    if (permissions.length === 0) {
+      const { count: anyPerms } = await sb
+        .from('role_permissions')
+        .select('id', { count: 'exact', head: true });
+      if ((anyPerms ?? 0) === 0) {
+        await ensureSupabaseSystemRoles(sb);
+        const { data: seededPerms } = await sb
+          .from('role_permissions')
+          .select('permission_key, allowed')
+          .eq('role_id', roleRel.id)
+          .eq('allowed', true);
+        permissions = (seededPerms ?? []).map((p) => p.permission_key as PermissionKey);
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    user: {
+      id: profile.id,
+      email: profile.email,
+      fullName: profile.full_name,
+      phone: profile.phone ?? '',
+      avatarUrl: profile.avatar_url ?? '',
+      role: roleName,
+      accountStatus,
+      permissions,
+      lastLoginAt: profile.last_login_at,
+      createdAt: profile.created_at
+    }
+  };
+}
+
+export async function resolveAdminAuthResult(
   req: AuthenticatedRequest
-): Promise<{ user: AdminUserProfile; jti?: string } | null> {
+): Promise<AdminResolutionResult> {
   const authHeader = req.headers.authorization;
   let token = '';
   let usedCookie = false;
@@ -228,71 +399,83 @@ export async function resolveAdminFromRequest(
     }
   }
 
-  if (!token) return null;
+  if (!token) {
+    return { ok: false, status: 401, error: 'Authentication required. Please sign in to the Admin Portal.' };
+  }
 
   if (usedCookie && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method.toUpperCase())) {
     if (!verifyMutationOrigin(req)) {
-      return null;
+      return {
+        ok: false,
+        status: 403,
+        error: 'Session origin verification failed. Please refresh and sign in again.'
+      };
     }
   }
 
   const sb = getSupabaseAdminClient();
   if (sb && token.split('.').length === 3) {
     const { data: userData, error } = await sb.auth.getUser(token);
-    if (!error && userData?.user) {
-      const { data: profile } = await sb
-        .from('profiles')
-        .select('id, email, full_name, phone, avatar_url, is_admin, account_status, last_login_at, created_at, admin_roles(id, name)')
-        .eq('id', userData.user.id)
-        .single();
-
-      if (profile && profile.is_admin && profile.account_status === 'active') {
-        const roleRel = profile.admin_roles as unknown as { id: string; name: AdminRoleName } | null;
-        const roleName: AdminRoleName = roleRel?.name ?? 'Admin';
-        let permissions: PermissionKey[] = [];
-        if (roleName === 'Super Admin') {
-          permissions = [...ALL_PERMISSION_KEYS];
-        } else if (roleRel?.id) {
-          const { data: perms } = await sb
-            .from('role_permissions')
-            .select('permission_key, allowed')
-            .eq('role_id', roleRel.id)
-            .eq('allowed', true);
-          permissions = (perms ?? []).map((p) => p.permission_key as PermissionKey);
-        }
-        return {
-          user: {
-            id: profile.id,
-            email: profile.email,
-            fullName: profile.full_name,
-            phone: profile.phone ?? '',
-            avatarUrl: profile.avatar_url ?? '',
-            role: roleName,
-            accountStatus: profile.account_status,
-            permissions,
-            lastLoginAt: profile.last_login_at,
-            createdAt: profile.created_at
-          }
-        };
-      }
+    if (error || !userData?.user) {
+      return {
+        ok: false,
+        status: 401,
+        error: 'Your Supabase session is invalid or has expired. Please sign in again.'
+      };
     }
-    return null;
+    const authUserConfirmed = Boolean(
+      userData.user.email_confirmed_at || userData.user.confirmed_at || userData.user.last_sign_in_at
+    );
+    return loadSupabaseAdminProfile(sb, userData.user.id, {
+      activateInvitedIfConfirmed: true,
+      authUserConfirmed
+    });
   }
 
   if (sb || isProductionEnvironment()) {
-    return null;
+    return {
+      ok: false,
+      status: 401,
+      error: 'A valid Supabase session token is required. Please sign in again.'
+    };
   }
 
   const payload = verifySessionToken(token);
-  if (!payload) return null;
+  if (!payload) {
+    return {
+      ok: false,
+      status: 401,
+      error: 'Your administrator session has expired or is invalid. Please sign in again.'
+    };
+  }
 
   const state = getDbState();
-  if (state.revokedJtis.includes(payload.jti)) return null;
+  if (state.revokedJtis.includes(payload.jti)) {
+    return {
+      ok: false,
+      status: 401,
+      error: 'This session has been signed out. Please sign in again.'
+    };
+  }
 
   const admin = state.admins.find((a) => a.id === payload.sub);
-  if (!admin || admin.accountStatus !== 'active') return null;
+  if (!admin) {
+    return {
+      ok: false,
+      status: 403,
+      error: 'Administrator account not found.'
+    };
+  }
+  if (admin.accountStatus !== 'active') {
+    return {
+      ok: false,
+      status: 403,
+      error: 'This administrator account is currently suspended or inactive.'
+    };
+  }
 
   return {
+    ok: true,
     jti: payload.jti,
     user: {
       id: admin.id,
@@ -309,15 +492,22 @@ export async function resolveAdminFromRequest(
   };
 }
 
+export async function resolveAdminFromRequest(
+  req: AuthenticatedRequest
+): Promise<{ user: AdminUserProfile; jti?: string } | null> {
+  const result = await resolveAdminAuthResult(req);
+  return result.ok ? { user: result.user, jti: result.jti } : null;
+}
+
 export async function requireAdmin(
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction
 ): Promise<void> {
   try {
-    const resolved = await resolveAdminFromRequest(req);
-    if (!resolved) {
-      res.status(401).json({ error: 'Authentication required. Please sign in to the Admin Portal.' });
+    const resolved = await resolveAdminAuthResult(req);
+    if (!resolved.ok) {
+      res.status(resolved.status).json({ error: resolved.error });
       return;
     }
     req.adminUser = resolved.user;
