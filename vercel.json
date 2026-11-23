@@ -13,8 +13,8 @@
       "destination": "/api/index"
     },
     {
-      "source": "/api/(.*)",
-      "destination": "/api/index?__vercel_api_path=$1"
+      "source": "/api/:path*",
+      "destination": "/api/index?__vercel_api_path=:path*"
     },
     {
       "source": "/((?!api$|api/|assets/|src/assets/).*)",

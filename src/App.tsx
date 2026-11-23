@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { Navbar } from './components/Navbar';
 import { Hero } from './components/Hero';
@@ -14,26 +14,73 @@ import { Footer } from './components/Footer';
 import { usePublicBootstrap } from './hooks/usePublicBootstrap';
 import { AdminAuthProvider } from './admin/hooks/useAdminAuth';
 import { AdminLayout, ProtectedAdminRoute } from './admin/layout/AdminLayout';
-import { AdminLoginPage } from './admin/pages/AdminLoginPage';
-import { DashboardPage } from './admin/pages/DashboardPage';
-import { WorkOrdersPage } from './admin/pages/WorkOrdersPage';
-import { WorkOrderDetailPage } from './admin/pages/WorkOrderDetailPage';
-import { VendorsPage } from './admin/pages/VendorsPage';
-import { VendorDetailPage } from './admin/pages/VendorDetailPage';
-import { ClientsPage } from './admin/pages/ClientsPage';
-import { ClientDetailPage } from './admin/pages/ClientDetailPage';
-import { BidRequestsPage } from './admin/pages/BidRequestsPage';
-import { BidRequestDetailPage } from './admin/pages/BidRequestDetailPage';
-import { DispatchPage } from './admin/pages/DispatchPage';
-import { ServicesAdminPage } from './admin/pages/ServicesAdminPage';
-import { GalleryAdminPage } from './admin/pages/GalleryAdminPage';
-import { CoverageAdminPage } from './admin/pages/CoverageAdminPage';
-import { ReviewsAdminPage } from './admin/pages/ReviewsAdminPage';
-import { MessagesAdminPage } from './admin/pages/MessagesAdminPage';
-import { ReportsAdminPage } from './admin/pages/ReportsAdminPage';
-import { SettingsAdminPage } from './admin/pages/SettingsAdminPage';
-import { ProfileAdminPage } from './admin/pages/ProfileAdminPage';
-import { AdminUsersPage } from './admin/pages/AdminUsersPage';
+
+const AdminLoginPage = lazy(() =>
+  import('./admin/pages/AdminLoginPage').then((m) => ({ default: m.AdminLoginPage }))
+);
+const DashboardPage = lazy(() =>
+  import('./admin/pages/DashboardPage').then((m) => ({ default: m.DashboardPage }))
+);
+const WorkOrdersPage = lazy(() =>
+  import('./admin/pages/WorkOrdersPage').then((m) => ({ default: m.WorkOrdersPage }))
+);
+const WorkOrderDetailPage = lazy(() =>
+  import('./admin/pages/WorkOrderDetailPage').then((m) => ({ default: m.WorkOrderDetailPage }))
+);
+const VendorsPage = lazy(() =>
+  import('./admin/pages/VendorsPage').then((m) => ({ default: m.VendorsPage }))
+);
+const VendorDetailPage = lazy(() =>
+  import('./admin/pages/VendorDetailPage').then((m) => ({ default: m.VendorDetailPage }))
+);
+const ClientsPage = lazy(() =>
+  import('./admin/pages/ClientsPage').then((m) => ({ default: m.ClientsPage }))
+);
+const ClientDetailPage = lazy(() =>
+  import('./admin/pages/ClientDetailPage').then((m) => ({ default: m.ClientDetailPage }))
+);
+const BidRequestsPage = lazy(() =>
+  import('./admin/pages/BidRequestsPage').then((m) => ({ default: m.BidRequestsPage }))
+);
+const BidRequestDetailPage = lazy(() =>
+  import('./admin/pages/BidRequestDetailPage').then((m) => ({ default: m.BidRequestDetailPage }))
+);
+const DispatchPage = lazy(() =>
+  import('./admin/pages/DispatchPage').then((m) => ({ default: m.DispatchPage }))
+);
+const ServicesAdminPage = lazy(() =>
+  import('./admin/pages/ServicesAdminPage').then((m) => ({ default: m.ServicesAdminPage }))
+);
+const GalleryAdminPage = lazy(() =>
+  import('./admin/pages/GalleryAdminPage').then((m) => ({ default: m.GalleryAdminPage }))
+);
+const CoverageAdminPage = lazy(() =>
+  import('./admin/pages/CoverageAdminPage').then((m) => ({ default: m.CoverageAdminPage }))
+);
+const ReviewsAdminPage = lazy(() =>
+  import('./admin/pages/ReviewsAdminPage').then((m) => ({ default: m.ReviewsAdminPage }))
+);
+const MessagesAdminPage = lazy(() =>
+  import('./admin/pages/MessagesAdminPage').then((m) => ({ default: m.MessagesAdminPage }))
+);
+const ReportsAdminPage = lazy(() =>
+  import('./admin/pages/ReportsAdminPage').then((m) => ({ default: m.ReportsAdminPage }))
+);
+const SettingsAdminPage = lazy(() =>
+  import('./admin/pages/SettingsAdminPage').then((m) => ({ default: m.SettingsAdminPage }))
+);
+const ProfileAdminPage = lazy(() =>
+  import('./admin/pages/ProfileAdminPage').then((m) => ({ default: m.ProfileAdminPage }))
+);
+const AdminUsersPage = lazy(() =>
+  import('./admin/pages/AdminUsersPage').then((m) => ({ default: m.AdminUsersPage }))
+);
+
+const RouteLoadingFallback = () => (
+  <div className="flex min-h-[50vh] items-center justify-center p-8 text-sm font-medium text-[#052E16]/70 dark:text-lime-200/75">
+    Loading portal view...
+  </div>
+);
 
 function getInitialDarkState(): boolean {
   if (typeof window === 'undefined') return false;
@@ -183,7 +230,8 @@ export default function App() {
   return (
     <AdminAuthProvider>
       <BrowserRouter>
-        <Routes>
+        <Suspense fallback={<RouteLoadingFallback />}>
+          <Routes>
           <Route
             path="/"
             element={<PublicSitePage isDark={isDark} onToggleTheme={handleToggleTheme} />}
@@ -344,7 +392,8 @@ export default function App() {
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+          </Routes>
+        </Suspense>
       </BrowserRouter>
     </AdminAuthProvider>
   );

@@ -51,6 +51,22 @@ export default defineConfig(({mode}) => {
         '@': path.resolve(import.meta.dirname, '.'),
       },
     },
+    build: {
+      chunkSizeWarningLimit: 700,
+      rolldownOptions: {
+        output: {
+          codeSplitting: {
+            groups: [
+              { name: 'react-vendor', test: /node_modules[\\/](react|react-dom|react-router|react-router-dom)[\\/]/ },
+              { name: 'supabase-vendor', test: /node_modules[\\/]@supabase[\\/]/ },
+              { name: 'firebase-vendor', test: /node_modules[\\/](firebase|@firebase)[\\/]/ },
+              { name: 'maps-vendor', test: /node_modules[\\/]@vis\.gl[\\/]/ },
+              { name: 'ui-vendor', test: /node_modules[\\/](lucide-react|motion|framer-motion)[\\/]/ },
+            ],
+          },
+        },
+      },
+    },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
