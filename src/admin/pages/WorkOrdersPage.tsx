@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Download, Plus, Search, Trash2, X } from 'lucide-react';
+import { Download, FileSpreadsheet, Plus, Search, Trash2, X } from 'lucide-react';
 import { apiRequest } from '../../services/api';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { GoogleSheetsSyncModal } from '../components/GoogleSheetsSyncModal';
 import { StatusBadge } from '../components/StatusBadge';
 import { ToastBanner, type ToastMessage } from '../components/ToastBanner';
 import { useAdminAuth } from '../hooks/useAdminAuth';
@@ -24,6 +25,7 @@ export const WorkOrdersPage: React.FC = () => {
   const [items, setItems] = useState<WorkOrderEntity[]>([]);
   const [clients, setClients] = useState<ClientRecord[]>([]);
   const [vendors, setVendors] = useState<VendorRecord[]>([]);
+  const [allVendors, setAllVendors] = useState<VendorRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<ToastMessage | null>(null);
 
@@ -33,6 +35,7 @@ export const WorkOrdersPage: React.FC = () => {
   const [page, setPage] = useState(1);
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [sheetsOpen, setSheetsOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<WorkOrderEntity | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -71,6 +74,7 @@ export const WorkOrdersPage: React.FC = () => {
       ]);
       setItems(woRes.items);
       setClients(cliRes.items);
+      setAllVendors(vndRes.items);
       setVendors(vndRes.items.filter((v) => v.applicationStatus === 'Approved'));
       setPage(1);
     } catch (err) {
@@ -170,6 +174,14 @@ export const WorkOrdersPage: React.FC = () => {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setSheetsOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-950/15 bg-white px-3.5 py-2 text-xs font-semibold text-[#052E16] hover:bg-lime-100 dark:border-lime-300/25 dark:bg-[#072716] dark:text-lime-100 cursor-pointer"
+          >
+            <FileSpreadsheet className="h-3.5 w-3.5" />
+            Google Sheets
+          </button>
           {hasPermission('reports.export') && (
             <button
               type="button"
@@ -547,6 +559,18 @@ export const WorkOrdersPage: React.FC = () => {
         loading={submitting}
         onConfirm={handleDelete}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      <GoogleSheetsSyncModal
+        open={sheetsOpen}
+        initialScope="work-orders"
+        workOrders={items}
+        vendors={allVendors}
+        canWriteWorkOrders={hasPermission('work_orders.write')}
+        canWriteVendors={hasPermission('vendors.write')}
+        onClose={() => setSheetsOpen(false)}
+        onSuccess={(message) => setToast({ type: 'success', text: message })}
+        onImported={loadData}
       />
     </div>
   );

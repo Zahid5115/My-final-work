@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Check, Plus, Search, X } from 'lucide-react';
+import { Check, FileSpreadsheet, Plus, Search, X } from 'lucide-react';
 import { apiRequest } from '../../services/api';
+import { GoogleSheetsSyncModal } from '../components/GoogleSheetsSyncModal';
 import { StatusBadge } from '../components/StatusBadge';
 import { ToastBanner, type ToastMessage } from '../components/ToastBanner';
 import { useAdminAuth } from '../hooks/useAdminAuth';
@@ -22,6 +23,7 @@ export const VendorsPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
+  const [sheetsOpen, setSheetsOpen] = useState(false);
 
   // Create vendor form
   const [companyName, setCompanyName] = useState('');
@@ -118,7 +120,7 @@ export const VendorsPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => setTab('vendors')}
@@ -140,6 +142,14 @@ export const VendorsPage: React.FC = () => {
             }`}
           >
             Vendor Bids ({bids.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setSheetsOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-950/15 bg-white px-3.5 py-2 text-xs font-semibold text-[#052E16] hover:bg-lime-100 dark:border-lime-300/25 dark:bg-[#072716] dark:text-lime-100 cursor-pointer"
+          >
+            <FileSpreadsheet className="h-3.5 w-3.5" />
+            Google Sheets
           </button>
           {hasPermission('vendors.write') && (
             <button
@@ -347,6 +357,18 @@ export const VendorsPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      <GoogleSheetsSyncModal
+        open={sheetsOpen}
+        initialScope="vendors"
+        vendors={vendors}
+        bids={bids}
+        canWriteWorkOrders={hasPermission('work_orders.write')}
+        canWriteVendors={hasPermission('vendors.write')}
+        onClose={() => setSheetsOpen(false)}
+        onSuccess={(message) => setToast({ type: 'success', text: message })}
+        onImported={loadData}
+      />
     </div>
   );
 };
