@@ -2,8 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { build } from 'esbuild';
 
-const outFile = path.resolve(process.cwd(), 'api', 'index.mjs');
+const outFile = path.resolve(process.cwd(), 'api', 'index.js');
+const legacyMjs = path.resolve(process.cwd(), 'api', 'index.mjs');
 fs.mkdirSync(path.dirname(outFile), { recursive: true });
+if (fs.existsSync(legacyMjs)) {
+  fs.unlinkSync(legacyMjs);
+}
 
 await build({
   entryPoints: [path.resolve(process.cwd(), 'server', 'vercel-entry.ts')],
