@@ -23,6 +23,19 @@ export class ApiError extends Error {
   }
 }
 
+let preferVercelQueryRouting = false;
+
+function toVercelQueryUrl(path: string): string | null {
+  if (!path.startsWith('/api/')) return null;
+  const queryIndex = path.indexOf('?');
+  const rawPathname = queryIndex >= 0 ? path.slice(0, queryIndex) : path;
+  const rawQuery = queryIndex >= 0 ? path.slice(queryIndex + 1) : '';
+  const subpath = rawPathname.slice('/api/'.length).replace(/^\/+/, '');
+  const params = new URLSearchParams(rawQuery);
+  params.set('__vercel_api_path', subpath);
+  return `/api?${params.toString()}`;
+}
+
 export async function apiRequest<T>(
   path: string,
   options: RequestInit & { skipUnauthorizedCallback?: boolean } = {}
@@ -38,18 +51,41 @@ export async function apiRequest<T>(
     headers.set('Content-Type', 'application/json');
   }
 
-  const response = await fetch(path, {
+  const initialUrl = preferVercelQueryRouting ? (toVercelQueryUrl(path) ?? path) : path;
+  let response = await fetch(initialUrl, {
     ...rest,
     headers,
     body,
     credentials: 'include'
   });
 
+  let contentType = response.headers.get('content-type') || '';
+  if (
+    !preferVercelQueryRouting &&
+    response.status === 404 &&
+    !contentType.includes('application/json')
+  ) {
+    const fallbackUrl = toVercelQueryUrl(path);
+    if (fallbackUrl) {
+      const fallbackResponse = await fetch(fallbackUrl, {
+        ...rest,
+        headers,
+        body,
+        credentials: 'include'
+      });
+      const fallbackType = fallbackResponse.headers.get('content-type') || '';
+      if (fallbackResponse.ok || fallbackType.includes('application/json')) {
+        preferVercelQueryRouting = true;
+        response = fallbackResponse;
+        contentType = fallbackType;
+      }
+    }
+  }
+
   if (response.status === 401 && !skipUnauthorizedCallback && onUnauthorizedHandler) {
     onUnauthorizedHandler();
   }
 
-  const contentType = response.headers.get('content-type') || '';
   if (contentType.includes('application/json')) {
     const data = await response.json();
     if (!response.ok) {

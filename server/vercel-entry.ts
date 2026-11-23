@@ -11,7 +11,7 @@ export function normalizeVercelApiUrl(
   try {
     const parsed = new URL(urlStr, 'http://localhost');
 
-    // Rewrite target: /api/app?__vercel_api_path=admin/auth/status
+    // Rewrite target: /api?__vercel_api_path=admin/auth/status
     const rewrittenPath = parsed.searchParams.get('__vercel_api_path');
     if (rewrittenPath !== null) {
       parsed.searchParams.delete('__vercel_api_path');
@@ -21,14 +21,14 @@ export function normalizeVercelApiUrl(
       return qs ? `${targetPath}?${qs}` : targetPath;
     }
 
-    // If invoked via /api/app or /api/index without __vercel_api_path, restore original URI if present
+    // Restore original URI if Vercel rewrote to /api or /api/index without query param
     const decodedPath = decodeURIComponent(parsed.pathname);
-    if (decodedPath === '/api/app' || decodedPath === '/api/index') {
+    if (decodedPath === '/api' || decodedPath === '/api/index') {
       const headerUri =
         (typeof headers?.['x-vercel-original-uri'] === 'string' && headers['x-vercel-original-uri']) ||
         (typeof headers?.['x-invoke-path'] === 'string' && headers['x-invoke-path']) ||
         '';
-      if (headerUri.startsWith('/api') && headerUri !== '/api/app' && headerUri !== '/api/index') {
+      if (headerUri.startsWith('/api/') && headerUri !== '/api/index') {
         const headerParsed = new URL(headerUri, 'http://localhost');
         const qs = parsed.searchParams.toString();
         return qs ? `${headerParsed.pathname}?${qs}` : headerParsed.pathname;

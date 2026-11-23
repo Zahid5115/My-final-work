@@ -68,14 +68,14 @@ npm install
 # Development server (Express + Vite SSR/SPA middleware on port 3000)
 npm run dev
 
-# Production build (Vite client bundle -> dist/ + Vercel Serverless API bundle -> api/app.js)
+# Production build (Vite client bundle -> dist/ + Vercel Serverless API bundle -> api/index.js)
 npm run build
 npm start
 ```
 
 ### Vercel Deployment Notes
-- `npm run build` compiles the Vite frontend into `dist/` and bundles `server/vercel-entry.ts` into the single Vercel Serverless Function `api/app.js` (`/api/app`).
-- `vercel.json` rewrites `/api` and `/api/*` to `/api/app` and all frontend routes (`/`, `/admin/*`) to `/index.html`.
+- `npm run build` compiles the Vite frontend into `dist/` and bundles `server/vercel-entry.ts` into the Vercel Serverless Function `api/index.js` (`/api`).
+- `vercel.json` rewrites `/api/(.*)` to `/api?__vercel_api_path=$1` and all frontend routes (`/`, `/admin/*`) to `/index.html`.
 - Set these required variables in **Vercel Project Settings → Environment Variables** (for **Production** and **Preview**, then **redeploy** so `VITE_*` variables are baked into the client build):
   - `SUPABASE_URL` & `VITE_SUPABASE_URL`
   - `VITE_SUPABASE_ANON_KEY`

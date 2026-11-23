@@ -83,11 +83,35 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       }
     } catch (err) {
       setUser(null);
-      setAuthStatusError(
+      let message =
         err instanceof Error
           ? err.message
-          : 'Unable to reach backend API (/api/admin/auth/status).'
-      );
+          : 'Unable to reach backend API (/api/admin/auth/status).';
+
+      if (err instanceof ApiError && err.status === 404) {
+        try {
+          const probe = await fetch('/api?__vercel_api_path=admin/auth/status', {
+            credentials: 'include'
+          });
+          const probeContentType = probe.headers.get('content-type') || '';
+          if (probeContentType.includes('application/json')) {
+            const payload = (await probe.json()) as AuthStatusResponse & { error?: string };
+            if (probe.ok) {
+              setAuthStatus(payload);
+              setAuthStatusError(null);
+              return;
+            }
+            message =
+              payload.error ||
+              `API probe returned ${probe.status} JSON while /api/admin/auth/status returned 404.`;
+          } else {
+            message = `API returned 404 (/api/admin/auth/status -> 404, /api probe -> ${probe.status} ${probeContentType || 'unknown'}). Ensure api/index.js and vercel.json are deployed from the repo root and Vercel Root Directory is empty.`;
+          }
+        } catch {
+          // Keep original 404 message
+        }
+      }
+      setAuthStatusError(message);
     } finally {
       setLoading(false);
     }

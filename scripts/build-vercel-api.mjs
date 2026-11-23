@@ -3,10 +3,10 @@ import path from 'node:path';
 import { build } from 'esbuild';
 
 const apiDir = path.resolve(process.cwd(), 'api');
-const outFile = path.join(apiDir, 'app.js');
+const outFile = path.join(apiDir, 'index.js');
 fs.mkdirSync(apiDir, { recursive: true });
 
-for (const legacy of ['index.mjs', 'index.js', '_handler.js', '[...path].js']) {
+for (const legacy of ['index.mjs', 'app.js', '_handler.js', '[...path].js']) {
   const legacyPath = path.join(apiDir, legacy);
   if (fs.existsSync(legacyPath)) {
     fs.unlinkSync(legacyPath);

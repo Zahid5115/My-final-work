@@ -6,14 +6,10 @@
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "/api/app?__vercel_api_path=$1"
+      "destination": "/api?__vercel_api_path=$1"
     },
     {
-      "source": "/api",
-      "destination": "/api/app"
-    },
-    {
-      "source": "/((?!api/).*)",
+      "source": "/((?!api$|api/).*)",
       "destination": "/index.html"
     }
   ]
