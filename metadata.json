@@ -1,0 +1,6 @@
+{
+  "name": "Smoker's Lawn Care Service",
+  "description": "Nationwide U.S. property preservation, lawn maintenance, handyman repairs, work order dispatch, and vendor portal by Smoker's Lawn Care Service LLC.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
