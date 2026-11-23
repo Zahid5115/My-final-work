@@ -25,6 +25,7 @@ interface AdminAuthContextValue {
   user: AdminUserProfile | null;
   loading: boolean;
   authStatus: AuthStatusResponse | null;
+  authStatusError: string | null;
   refreshAuth: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   setupFirstAdmin: (params: {
@@ -43,6 +44,7 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [user, setUser] = useState<AdminUserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [authStatus, setAuthStatus] = useState<AuthStatusResponse | null>(null);
+  const [authStatusError, setAuthStatusError] = useState<string | null>(null);
 
   const handleUnauthorized = useCallback(() => {
     setInMemoryAuthToken(null);
@@ -51,6 +53,7 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const refreshAuth = useCallback(async () => {
     setLoading(true);
+    setAuthStatusError(null);
     try {
       const status = await apiRequest<AuthStatusResponse>('/api/admin/auth/status', {
         skipUnauthorizedCallback: true
@@ -78,8 +81,13 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           setInMemoryAuthToken(null);
         }
       }
-    } catch {
+    } catch (err) {
       setUser(null);
+      setAuthStatusError(
+        err instanceof Error
+          ? err.message
+          : 'Unable to reach backend API (/api/admin/auth/status).'
+      );
     } finally {
       setLoading(false);
     }
@@ -218,6 +226,7 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         user,
         loading,
         authStatus,
+        authStatusError,
         refreshAuth,
         login,
         setupFirstAdmin,

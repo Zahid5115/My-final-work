@@ -18,7 +18,7 @@ Copy `.env.example` to `.env` (or configure directly in your Vercel / Cloud Run 
 | `ADMIN_BOOTSTRAP_EMAIL` | **Server Only** | Optional owner email allowlist; when set, `/admin/setup` only accepts this exact email for the initial Super Admin claim. |
 | `RESEND_API_KEY` | **Server Only (SECRET)** | Optional Resend API key for transactional password reset & urgent dispatch email notifications. |
 | `EMAIL_FROM` | Server Only | Verified sender address (e.g. `Smoker's Dispatch <dispatch@yourdomain.com>`). |
-| `GOOGLE_MAPS_API_KEY` | Client / Build | Google Maps JavaScript API key (restricted by HTTP referrer in Google Cloud Console). |
+| `VITE_GOOGLE_MAPS_API_KEY` | Client / Build | Google Maps JavaScript API key (restricted by HTTP referrer in Google Cloud Console). |
 
 ---
 
@@ -41,7 +41,7 @@ Execute the four SQL migration files located in `supabase/migrations/` inside th
 
 No default admin username or password exists in the codebase or migrations, and public visitors can never claim admin access automatically.
 
-1. Set `ADMIN_BOOTSTRAP_SECRET` (and optionally `ADMIN_BOOTSTRAP_EMAIL` to your personal/work email) in **AI Studio Secrets** or your server `.env` file.
+1. Set `ADMIN_BOOTSTRAP_SECRET` (and optionally `ADMIN_BOOTSTRAP_EMAIL` to your personal/work email) in **AI Studio Secrets**, Vercel Environment Variables, or your server `.env` file.
 2. Navigate to `/admin/setup` (or `/admin/login`).
 3. Because zero active admins exist yet, `/admin/setup` presents the protected **First-Time Super Admin Setup** form.
 4. Enter your Full Name, Email, strong password (10+ characters), and the `ADMIN_BOOTSTRAP_SECRET`. (Alternatively, run `npm run bootstrap:admin` from the server CLI.)
@@ -68,12 +68,19 @@ npm install
 # Development server (Express + Vite SSR/SPA middleware on port 3000)
 npm run dev
 
-# Production build & server start
+# Production build (Vite client bundle -> dist/ + Vercel Serverless API bundle -> api/index.mjs)
 npm run build
 npm start
 ```
 
 ### Vercel Deployment Notes
-- `vercel.json` is preconfigured to rewrite `/admin/*` deep links and `/` to `/index.html` while preserving `/api/*` routing.
-- Set all required `VITE_*` and server secrets in **Vercel Project Settings → Environment Variables**.
+- `npm run build` compiles the Vite frontend into `dist/` and bundles `server/vercel-entry.ts` into the Vercel Serverless Function `api/index.mjs`.
+- `vercel.json` routes `/api` and `/api/*` to `api/index.mjs` and rewrites all frontend routes (`/`, `/admin/*`) to `/index.html`.
+- Set these required variables in **Vercel Project Settings → Environment Variables** (for **Production** and **Preview**, then **redeploy** so `VITE_*` variables are baked into the client build):
+  - `SUPABASE_URL` & `VITE_SUPABASE_URL`
+  - `VITE_SUPABASE_ANON_KEY`
+  - `SUPABASE_SERVICE_ROLE_KEY`
+  - `ADMIN_BOOTSTRAP_SECRET` & `ADMIN_BOOTSTRAP_EMAIL`
+  - `VITE_GOOGLE_MAPS_API_KEY` (optional, for interactive coverage map)
 - Restrict your Google Maps API key in Google Cloud Console using HTTP Referrer allowlists matching your Vercel production & preview URLs.
+

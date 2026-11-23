@@ -21,7 +21,8 @@ import { apiRequest } from '../../services/api';
 export const AdminLoginPage: React.FC<{ mode?: 'login' | 'setup' | 'forgot' | 'reset' }> = ({
   mode = 'login'
 }) => {
-  const { user, loading, authStatus, refreshAuth, login, setupFirstAdmin } = useAdminAuth();
+  const { user, loading, authStatus, authStatusError, refreshAuth, login, setupFirstAdmin } =
+    useAdminAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -197,7 +198,11 @@ export const AdminLoginPage: React.FC<{ mode?: 'login' | 'setup' | 'forgot' | 'r
               ? 'Supabase Auth + RLS'
               : authStatus?.authMode === 'unconfigured'
               ? 'Supabase Required (Production)'
-              : 'Local Dev Mode'}
+              : authStatus?.authMode === 'local'
+              ? 'Local Dev Mode'
+              : authStatusError
+              ? 'API Unreachable'
+              : 'Checking Backend...'}
           </span>
         </div>
 
@@ -248,6 +253,15 @@ export const AdminLoginPage: React.FC<{ mode?: 'login' | 'setup' | 'forgot' | 'r
             <div className="mt-4 rounded-xl border border-red-300 bg-red-50 p-3.5 text-xs text-red-950 dark:border-red-400/30 dark:bg-red-950/30 dark:text-red-100">
               <p className="font-bold">Production Database Configuration Required</p>
               <p className="mt-1 leading-relaxed opacity-90">{authStatus.productionConfigError}</p>
+            </div>
+          )}
+
+          {authStatusError && (
+            <div className="mt-4 rounded-xl border border-red-300 bg-red-50 p-3.5 text-xs text-red-950 dark:border-red-400/30 dark:bg-red-950/30 dark:text-red-100">
+              <p className="font-bold">Backend API Connection Issue</p>
+              <p className="mt-1 leading-relaxed opacity-90">
+                Could not reach <code className="font-mono">/api/admin/auth/status</code> ({authStatusError}). If deployed on Vercel, ensure <code className="font-mono">api/index.mjs</code> and <code className="font-mono">SUPABASE_URL</code> / <code className="font-mono">SUPABASE_SERVICE_ROLE_KEY</code> environment variables are deployed.
+              </p>
             </div>
           )}
 

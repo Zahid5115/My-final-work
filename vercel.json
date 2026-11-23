@@ -3,7 +3,20 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "framework": "vite",
+  "functions": {
+    "api/index.mjs": {
+      "maxDuration": 30
+    }
+  },
   "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index?__vercel_api_path=$1"
+    },
+    {
+      "source": "/api",
+      "destination": "/api/index"
+    },
     {
       "source": "/((?!api/).*)",
       "destination": "/index.html"

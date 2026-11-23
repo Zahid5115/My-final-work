@@ -2,20 +2,14 @@ import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
-import { createApiRouter } from './server/routes.ts';
-import { securityHeadersMiddleware } from './server/security.ts';
+import { createApiApp } from './server/app.ts';
 import { UPLOADS_ROOT } from './server/store.ts';
 import { assertProductionPersistence, isServerSupabaseConfigured } from './server/supabaseAdmin.ts';
 
 async function startServer() {
   assertProductionPersistence();
-  const app = express();
+  const app = createApiApp({ includeErrorHandler: false });
   const isProd = process.env.NODE_ENV === 'production';
-
-  app.set('trust proxy', 1);
-  app.use(securityHeadersMiddleware);
-  app.use(express.json({ limit: '2mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
   // Serve local gallery uploads only in local preview mode when Supabase is unconfigured
   if (!isProd && !isServerSupabaseConfigured()) {
@@ -23,9 +17,6 @@ async function startServer() {
     fs.mkdirSync(galleryUploadsDir, { recursive: true });
     app.use('/uploads/gallery', express.static(galleryUploadsDir));
   }
-
-  // Mount API routes
-  app.use('/api', createApiRouter());
 
   app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const message = err instanceof Error ? err.message : 'Unexpected server error.';
