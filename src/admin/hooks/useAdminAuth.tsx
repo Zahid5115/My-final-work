@@ -58,6 +58,12 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const status = await apiRequest<AuthStatusResponse>('/api/admin/auth/status', {
         skipUnauthorizedCallback: true
       });
+      if (!status || typeof status !== 'object' || typeof status.authMode !== 'string') {
+        throw new ApiError(
+          'Backend API returned an invalid response instead of JSON for /api/admin/auth/status.',
+          502
+        );
+      }
       setAuthStatus(status);
 
       // If browser Supabase is active, sync Supabase session token into memory
@@ -88,27 +94,27 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           ? err.message
           : 'Unable to reach backend API (/api/admin/auth/status).';
 
-      if (err instanceof ApiError && err.status === 404) {
+      if (err instanceof ApiError && (err.status === 404 || err.status === 502)) {
         try {
-          const probe = await fetch('/api?__vercel_api_path=admin/auth/status', {
+          const probe = await fetch('/api/index?__vercel_api_path=admin/auth/status', {
             credentials: 'include'
           });
           const probeContentType = probe.headers.get('content-type') || '';
           if (probeContentType.includes('application/json')) {
             const payload = (await probe.json()) as AuthStatusResponse & { error?: string };
-            if (probe.ok) {
+            if (probe.ok && typeof payload.authMode === 'string') {
               setAuthStatus(payload);
               setAuthStatusError(null);
               return;
             }
             message =
               payload.error ||
-              `API probe returned ${probe.status} JSON while /api/admin/auth/status returned 404.`;
+              `API probe returned ${probe.status} JSON while /api/admin/auth/status returned ${err.status}.`;
           } else {
-            message = `API returned 404 (/api/admin/auth/status -> 404, /api probe -> ${probe.status} ${probeContentType || 'unknown'}). Ensure api/index.js and vercel.json are deployed from the repo root and Vercel Root Directory is empty.`;
+            message = `API returned ${err.status} (/api/admin/auth/status -> ${err.status}, /api/index probe -> ${probe.status} ${probeContentType || 'unknown'}). Ensure api/index.js and vercel.json are deployed from the repo root and Vercel Root Directory is empty.`;
           }
         } catch {
-          // Keep original 404 message
+          // Keep original error message
         }
       }
       setAuthStatusError(message);

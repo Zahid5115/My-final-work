@@ -33,7 +33,7 @@ function toVercelQueryUrl(path: string): string | null {
   const subpath = rawPathname.slice('/api/'.length).replace(/^\/+/, '');
   const params = new URLSearchParams(rawQuery);
   params.set('__vercel_api_path', subpath);
-  return `/api?${params.toString()}`;
+  return `/api/index?${params.toString()}`;
 }
 
 export async function apiRequest<T>(
@@ -59,12 +59,13 @@ export async function apiRequest<T>(
     credentials: 'include'
   });
 
-  let contentType = response.headers.get('content-type') || '';
-  if (
-    !preferVercelQueryRouting &&
-    response.status === 404 &&
-    !contentType.includes('application/json')
-  ) {
+  let contentType = (response.headers.get('content-type') || '').toLowerCase();
+  const isUnexpectedHtmlOr404 =
+    path.startsWith('/api/') &&
+    ((response.status === 404 && !contentType.includes('application/json')) ||
+      contentType.includes('text/html'));
+
+  if (!preferVercelQueryRouting && isUnexpectedHtmlOr404) {
     const fallbackUrl = toVercelQueryUrl(path);
     if (fallbackUrl) {
       const fallbackResponse = await fetch(fallbackUrl, {
@@ -73,8 +74,8 @@ export async function apiRequest<T>(
         body,
         credentials: 'include'
       });
-      const fallbackType = fallbackResponse.headers.get('content-type') || '';
-      if (fallbackResponse.ok || fallbackType.includes('application/json')) {
+      const fallbackType = (fallbackResponse.headers.get('content-type') || '').toLowerCase();
+      if (fallbackType.includes('application/json')) {
         preferVercelQueryRouting = true;
         response = fallbackResponse;
         contentType = fallbackType;
@@ -92,6 +93,13 @@ export async function apiRequest<T>(
       throw new ApiError(data?.error || `Request failed (${response.status})`, response.status);
     }
     return data as T;
+  }
+
+  if (path.startsWith('/api/') && contentType.includes('text/html')) {
+    throw new ApiError(
+      'Backend API returned HTML instead of JSON. Ensure /api/* routes to api/index.js on Vercel.',
+      response.status === 200 ? 502 : response.status
+    );
   }
 
   if (!response.ok) {

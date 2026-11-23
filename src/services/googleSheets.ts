@@ -381,6 +381,73 @@ export async function syncVendorsAndBidsToSheet(
   return { vendorCount, bidCount, metadata };
 }
 
+export interface FullGoogleSheetsSyncResult {
+  spreadsheetId: string;
+  spreadsheetUrl: string;
+  title: string;
+  workOrderCount: number;
+  vendorCount: number;
+  bidCount: number;
+  metadata: SpreadsheetMetadata;
+}
+
+export async function syncWorkOrderAndVendorData(params: {
+  accessToken: string;
+  spreadsheetId?: string;
+  workbookTitle?: string;
+  workOrdersTabName?: string;
+  vendorsTabName?: string;
+  bidsTabName?: string;
+  workOrders: WorkOrderEntity[];
+  vendors: VendorRecord[];
+  bids: VendorBidEntity[];
+}): Promise<FullGoogleSheetsSyncResult> {
+  const {
+    accessToken,
+    spreadsheetId,
+    workbookTitle,
+    workOrdersTabName = DEFAULT_WORK_ORDERS_TAB,
+    vendorsTabName = DEFAULT_VENDORS_TAB,
+    bidsTabName = DEFAULT_VENDOR_BIDS_TAB,
+    workOrders,
+    vendors,
+    bids
+  } = params;
+
+  const targetMeta = spreadsheetId
+    ? await ensureTabsExist(accessToken, spreadsheetId, [
+        workOrdersTabName,
+        vendorsTabName,
+        bidsTabName
+      ])
+    : await createWorkOrdersAndVendorSpreadsheet(accessToken, workbookTitle);
+
+  const woResult = await syncWorkOrdersToSheet(
+    accessToken,
+    targetMeta.spreadsheetId,
+    workOrdersTabName,
+    workOrders
+  );
+  const vendorResult = await syncVendorsAndBidsToSheet(
+    accessToken,
+    targetMeta.spreadsheetId,
+    vendorsTabName,
+    bidsTabName,
+    vendors,
+    bids
+  );
+
+  return {
+    spreadsheetId: vendorResult.metadata.spreadsheetId,
+    spreadsheetUrl: vendorResult.metadata.spreadsheetUrl,
+    title: vendorResult.metadata.title,
+    workOrderCount: woResult.count,
+    vendorCount: vendorResult.vendorCount,
+    bidCount: vendorResult.bidCount,
+    metadata: vendorResult.metadata
+  };
+}
+
 export async function readSheetRows(
   accessToken: string,
   spreadsheetId: string,

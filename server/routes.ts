@@ -13,7 +13,8 @@ export function createApiRouter(): express.Router {
     if (
       isProductionEnvironment() &&
       !isServerSupabaseConfigured() &&
-      req.path !== '/admin/auth/status'
+      req.path !== '/admin/auth/status' &&
+      req.path !== '/public/maps-config'
     ) {
       res.status(503).json({
         error:

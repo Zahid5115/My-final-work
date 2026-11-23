@@ -65,6 +65,16 @@ function toLocalPublicBootstrap() {
 export function registerPublicRoutes(router: express.Router): void {
   const publicSubmitLimiter = createRateLimiter(25, 15 * 60 * 1000);
 
+  router.get('/public/maps-config', (_req, res) => {
+    const rawKey = (
+      process.env.VITE_GOOGLE_MAPS_API_KEY ||
+      process.env.GOOGLE_MAPS_API_KEY ||
+      ''
+    ).trim();
+    const apiKey = rawKey && rawKey !== 'MY_GOOGLE_MAPS_API_KEY' ? rawKey : '';
+    res.json({ apiKey });
+  });
+
   router.get('/public/bootstrap', async (_req, res, next) => {
     try {
       const sb = getSupabaseAdminClient();

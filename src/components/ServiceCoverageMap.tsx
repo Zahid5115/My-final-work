@@ -12,8 +12,20 @@ import {
 } from '@vis.gl/react-google-maps';
 import { Compass, Layers, MapPin } from 'lucide-react';
 import type { CoverageRegion, WorkOrderRecord } from '../data/servicesData';
+import { apiRequest } from '../services/api';
 
-const MAPS_API_KEY = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined) ?? '';
+function cleanMapsKey(raw: string | undefined): string {
+  const trimmed = (raw ?? '').trim();
+  return trimmed && trimmed !== 'MY_GOOGLE_MAPS_API_KEY' ? trimmed : '';
+}
+
+function isValidCoordinates(coords: { lat: number; lng: number } | null | undefined): boolean {
+  return Boolean(coords && Number.isFinite(coords.lat) && Number.isFinite(coords.lng));
+}
+
+const BUILD_MAPS_API_KEY = cleanMapsKey(
+  import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined
+);
 
 const US_NATIONAL_CENTER = { lat: 38.2, lng: -92.5 };
 
@@ -158,7 +170,7 @@ const MapCanvasInner: React.FC<ServiceCoverageMapProps> = ({
   }, [status]);
 
   useEffect(() => {
-    if (selectedWorkOrder) {
+    if (selectedWorkOrder && isValidCoordinates(selectedWorkOrder.coordinates)) {
       setFocusPoint({
         lat: selectedWorkOrder.coordinates.lat,
         lng: selectedWorkOrder.coordinates.lng,
@@ -167,7 +179,7 @@ const MapCanvasInner: React.FC<ServiceCoverageMapProps> = ({
       return;
     }
     const region = regions[activeRegionIdx];
-    if (region) {
+    if (region && isValidCoordinates(region.coordinates)) {
       setFocusPoint({
         lat: region.coordinates.lat,
         lng: region.coordinates.lng,
@@ -245,27 +257,31 @@ const MapCanvasInner: React.FC<ServiceCoverageMapProps> = ({
         >
           <MapCameraSync focusPoint={focusPoint} />
 
-          {regions.map((region, idx) => (
-            <HubMarker
-              key={region.region}
-              region={region}
-              isActive={!selectedWorkOrder && activeRegionIdx === idx}
-              onSelect={() => {
-                onSelectWorkOrder(null);
-                onSelectRegion(idx);
-              }}
-            />
-          ))}
+          {regions
+            .filter((region) => isValidCoordinates(region.coordinates))
+            .map((region, idx) => (
+              <HubMarker
+                key={region.region}
+                region={region}
+                isActive={!selectedWorkOrder && activeRegionIdx === idx}
+                onSelect={() => {
+                  onSelectWorkOrder(null);
+                  onSelectRegion(idx);
+                }}
+              />
+            ))}
 
-          {workOrders.map((wo) => (
-            <WorkOrderMarker
-              key={wo.id}
-              workOrder={wo}
-              isSelected={selectedWorkOrder?.id === wo.id}
-              onSelect={() => onSelectWorkOrder(wo)}
-              onClose={() => onSelectWorkOrder(null)}
-            />
-          ))}
+          {workOrders
+            .filter((wo) => isValidCoordinates(wo.coordinates))
+            .map((wo) => (
+              <WorkOrderMarker
+                key={wo.id}
+                workOrder={wo}
+                isSelected={selectedWorkOrder?.id === wo.id}
+                onSelect={() => onSelectWorkOrder(wo)}
+                onClose={() => onSelectWorkOrder(null)}
+              />
+            ))}
         </GoogleMap>
       </div>
     </div>
@@ -273,16 +289,63 @@ const MapCanvasInner: React.FC<ServiceCoverageMapProps> = ({
 };
 
 export const ServiceCoverageMap: React.FC<ServiceCoverageMapProps> = (props) => {
-  if (!MAPS_API_KEY) {
+  const [mapsApiKey, setMapsApiKey] = useState<string>(BUILD_MAPS_API_KEY);
+  const [checkingRuntimeKey, setCheckingRuntimeKey] = useState<boolean>(!BUILD_MAPS_API_KEY);
+  const [configError, setConfigError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (BUILD_MAPS_API_KEY) return;
+    let cancelled = false;
+    void apiRequest<{ apiKey?: string }>('/api/public/maps-config', {
+      skipUnauthorizedCallback: true
+    })
+      .then((res) => {
+        if (!cancelled) {
+          const runtimeKey = cleanMapsKey(res?.apiKey);
+          if (runtimeKey) {
+            setMapsApiKey(runtimeKey);
+            setConfigError(null);
+          }
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setConfigError(err instanceof Error ? err.message : null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCheckingRuntimeKey(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (checkingRuntimeKey) {
+    return (
+      <div className="flex h-[340px] w-full flex-col items-center justify-center rounded-xl border border-emerald-950/15 bg-white p-6 text-center text-[#052E16] dark:border-lime-300/20 dark:bg-[#072716] dark:text-lime-100">
+        <MapPin className="h-7 w-7 animate-pulse text-emerald-700 dark:text-lime-400" aria-hidden="true" />
+        <p className="mt-2 text-xs font-semibold opacity-75">Loading interactive Google Map...</p>
+      </div>
+    );
+  }
+
+  if (!mapsApiKey) {
     return (
       <div className="flex h-[340px] w-full flex-col items-center justify-center rounded-xl border border-emerald-950/15 bg-white p-6 text-center text-[#052E16] dark:border-lime-300/20 dark:bg-[#072716] dark:text-lime-100">
         <MapPin className="h-8 w-8 text-emerald-700 dark:text-lime-400" aria-hidden="true" />
         <p className="mt-3 font-display text-base font-bold">
           Google Maps API Key Required
         </p>
-        <p className="mt-1 max-w-sm text-xs opacity-75">
-          Configure <code className="font-mono">VITE_GOOGLE_MAPS_API_KEY</code> to display the live
-          regional hub and work-order coverage map.
+        <p className="mt-1 max-w-md text-xs opacity-75">
+          {configError
+            ? configError
+            : (
+              <>
+                Configure <code className="font-mono">VITE_GOOGLE_MAPS_API_KEY</code> (or{' '}
+                <code className="font-mono">GOOGLE_MAPS_API_KEY</code>) in your deployment environment variables and redeploy to display the live regional hub and work-order coverage map.
+              </>
+            )}
         </p>
       </div>
     );
@@ -290,7 +353,7 @@ export const ServiceCoverageMap: React.FC<ServiceCoverageMapProps> = (props) => 
 
   return (
     <APIProvider
-      apiKey={MAPS_API_KEY}
+      apiKey={mapsApiKey}
       libraries={['marker']}
       language="en"
       region="US"

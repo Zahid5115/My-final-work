@@ -30,6 +30,7 @@ import {
   parseWorkOrderSheetRows,
   readSheetRows,
   syncVendorsAndBidsToSheet,
+  syncWorkOrderAndVendorData,
   syncWorkOrdersToSheet,
   type SpreadsheetMetadata
 } from '../../services/googleSheets';
@@ -322,22 +323,15 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
         setStatusNote(msg);
         onSuccess(msg);
       } else if (confirmAction.kind === 'sync-all') {
-        const woRes = await syncWorkOrdersToSheet(
-          token,
-          metadata.spreadsheetId,
-          DEFAULT_WORK_ORDERS_TAB,
-          workOrders
-        );
-        const vRes = await syncVendorsAndBidsToSheet(
-          token,
-          metadata.spreadsheetId,
-          DEFAULT_VENDORS_TAB,
-          DEFAULT_VENDOR_BIDS_TAB,
+        const syncRes = await syncWorkOrderAndVendorData({
+          accessToken: token,
+          spreadsheetId: metadata.spreadsheetId,
+          workOrders,
           vendors,
           bids
-        );
-        setMetadata(vRes.metadata);
-        const msg = `Full sync complete: ${woRes.count} Work Order(s), ${vRes.vendorCount} Vendor(s), and ${vRes.bidCount} Vendor Bid(s) updated in "${metadata.title}".`;
+        });
+        setMetadata(syncRes.metadata);
+        const msg = `Full sync complete: ${syncRes.workOrderCount} Work Order(s), ${syncRes.vendorCount} Vendor(s), and ${syncRes.bidCount} Vendor Bid(s) updated in "${syncRes.title}".`;
         setStatusNote(msg);
         onSuccess(msg);
       } else if (confirmAction.kind === 'import-work-orders') {
