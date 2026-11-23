@@ -14,3 +14,7 @@
     }
   ]
 }
+{
+"source": "/api/(.*)",
+"destination": "/api?__vercel_api_path=$1"
+}
