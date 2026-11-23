@@ -39,7 +39,7 @@ export const AdminUsersPage: React.FC = () => {
   const [roles, setRoles] = useState<RolePermissionConfig[]>([]);
   const [allPermKeys, setAllPermKeys] = useState<PermissionKey[]>([]);
   const [backendMode, setBackendMode] = useState<'supabase' | 'local'>(
-    authStatus?.authMode ?? 'local'
+    authStatus?.authMode === 'supabase' ? 'supabase' : 'local'
   );
 
   const [search, setSearch] = useState('');

@@ -5,8 +5,10 @@ import express from 'express';
 import { createApiRouter } from './server/routes.ts';
 import { securityHeadersMiddleware } from './server/security.ts';
 import { UPLOADS_ROOT } from './server/store.ts';
+import { assertProductionPersistence, isServerSupabaseConfigured } from './server/supabaseAdmin.ts';
 
 async function startServer() {
+  assertProductionPersistence();
   const app = express();
   const isProd = process.env.NODE_ENV === 'production';
 
@@ -15,10 +17,12 @@ async function startServer() {
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
-  // Serve only public gallery uploads directly; all private buckets require /api/admin/files auth
-  const galleryUploadsDir = path.join(UPLOADS_ROOT, 'gallery');
-  fs.mkdirSync(galleryUploadsDir, { recursive: true });
-  app.use('/uploads/gallery', express.static(galleryUploadsDir));
+  // Serve local gallery uploads only in local preview mode when Supabase is unconfigured
+  if (!isProd && !isServerSupabaseConfigured()) {
+    const galleryUploadsDir = path.join(UPLOADS_ROOT, 'gallery');
+    fs.mkdirSync(galleryUploadsDir, { recursive: true });
+    app.use('/uploads/gallery', express.static(galleryUploadsDir));
+  }
 
   // Mount API routes
   app.use('/api', createApiRouter());

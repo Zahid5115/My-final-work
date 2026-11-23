@@ -46,10 +46,26 @@ export function getSupabaseConfigDiagnostics(): {
   };
 }
 
+export function isProductionEnvironment(): boolean {
+  return (
+    process.env.NODE_ENV === 'production' ||
+    process.env.VERCEL === '1' ||
+    Boolean(process.env.VERCEL_ENV)
+  );
+}
+
 export function isServerSupabaseConfigured(): boolean {
   const url = normalizeSupabaseUrl(process.env.SUPABASE_URL);
   const serviceKey = cleanSecretValue(process.env.SUPABASE_SERVICE_ROLE_KEY);
   return Boolean(url && serviceKey);
+}
+
+export function assertProductionPersistence(): void {
+  if (isProductionEnvironment() && !isServerSupabaseConfigured()) {
+    throw new Error(
+      'Production database configuration error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required in production. Local JSON persistence (data/platform-db.json) is disabled in production.'
+    );
+  }
 }
 
 export function getSupabaseAdminClient(): SupabaseClient | null {

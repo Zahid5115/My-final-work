@@ -4,7 +4,7 @@ import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { hashPassword, isValidEmail, sanitizeText } from './security.ts';
 import { DEFAULT_ROLES, appendActivityLog, getDbState, saveDbState } from './store.ts';
-import { getSupabaseAdminClient } from './supabaseAdmin.ts';
+import { getSupabaseAdminClient, isProductionEnvironment } from './supabaseAdmin.ts';
 
 function getArgValue(flag: string): string {
   const idx = process.argv.indexOf(flag);
@@ -18,6 +18,10 @@ async function runBootstrap(): Promise<void> {
   const rl = readline.createInterface({ input, output });
   try {
     const sb = getSupabaseAdminClient();
+    if (isProductionEnvironment() && !sb) {
+      console.error('Aborted: Production environments require SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.');
+      process.exit(1);
+    }
     const mode = sb ? 'supabase' : 'local';
     console.log(`\nSmoker's Lawn Care Service — First Super Admin CLI Bootstrap (${mode} mode)\n`);
 
@@ -27,7 +31,7 @@ async function runBootstrap(): Promise<void> {
         .select('id', { count: 'exact', head: true })
         .eq('is_admin', true);
       if (error) {
-        console.error('Supabase query failed. Confirm migrations 001–003 are applied:', error.message);
+        console.error('Supabase query failed. Confirm migrations 001–004 are applied:', error.message);
         process.exit(1);
       }
       if ((count ?? 0) > 0) {
@@ -69,6 +73,34 @@ async function runBootstrap(): Promise<void> {
     }
 
     if (sb) {
+      const { data: created, error: createErr } = await sb.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,
+        user_metadata: { full_name: fullName }
+      });
+      if (createErr || !created.user) {
+        console.error('Failed to create Supabase Auth user:', createErr?.message);
+        process.exit(1);
+      }
+
+      const { data: claimRows, error: rpcErr } = await sb.rpc('claim_first_super_admin', {
+        p_user_id: created.user.id,
+        p_email: email,
+        p_full_name: fullName
+      });
+
+      if (!rpcErr && Array.isArray(claimRows) && claimRows.length > 0) {
+        if (!claimRows[0].claimed) {
+          await sb.auth.admin.deleteUser(created.user.id);
+          console.error('Aborted: Another process claimed the first Super Admin concurrently.');
+          process.exit(1);
+        }
+        console.log(`\nSuccess: First Super Admin (${email}) created atomically in Supabase. Setup is now locked.`);
+        return;
+      }
+
+      // Fallback if migration 004 has not yet been applied
       let { data: superRole } = await sb
         .from('admin_roles')
         .select('id')
@@ -89,18 +121,8 @@ async function runBootstrap(): Promise<void> {
       }
 
       if (!superRole) {
+        await sb.auth.admin.deleteUser(created.user.id);
         console.error('Failed to resolve Super Admin role in admin_roles.');
-        process.exit(1);
-      }
-
-      const { data: created, error: createErr } = await sb.auth.admin.createUser({
-        email,
-        password,
-        email_confirm: true,
-        user_metadata: { full_name: fullName }
-      });
-      if (createErr || !created.user) {
-        console.error('Failed to create Supabase Auth user:', createErr?.message);
         process.exit(1);
       }
 

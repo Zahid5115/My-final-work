@@ -24,11 +24,12 @@ Copy `.env.example` to `.env` (or configure directly in your Vercel / Cloud Run 
 
 ## 2. Supabase Database & Storage Setup
 
-Execute the three SQL migration files located in `supabase/migrations/` inside the Supabase SQL Editor **in numerical order**:
+Execute the four SQL migration files located in `supabase/migrations/` inside the Supabase SQL Editor **in numerical order**:
 
 1. `supabase/migrations/001_initial_schema.sql` — Creates all 25 tables, foreign keys, indexes, check constraints, and `updated_at` triggers.
-2. `supabase/migrations/002_rls_and_storage.sql` — Enables Row Level Security (`RLS`) across all 25 tables, creates `is_active_admin()` / `has_admin_permission(text)` `SECURITY DEFINER` helpers, creates immutable audit log rules, and provisions 4 storage buckets (`gallery`, `work-order-attachments`, `vendor-documents`, `dispatch-attachments`) with 10 MB size limits and strict MIME allowlists.
+2. `supabase/migrations/002_rls_and_storage.sql` — Enables Row Level Security (`RLS`) across all 25 tables with **separate `SELECT`, `INSERT`, `UPDATE`, and `DELETE` policies** per operation (so read permissions never allow deletion), creates `is_active_admin()` / `has_admin_permission(text)` helpers, creates `claim_first_super_admin()` atomic bootstrap RPC (`pg_advisory_xact_lock`), and provisions 4 storage buckets (`gallery`, `work-order-attachments`, `vendor-documents`, `dispatch-attachments`) with 10 MB size limits and strict MIME allowlists.
 3. `supabase/migrations/003_seed_demo_data.sql` — Idempotently seeds the 5 RBAC roles (`Super Admin`, `Admin`, `Operations Manager`, `Vendor Manager`, `Support Manager`), default granular permissions, `business_settings`, and demo operational records (`is_demo = TRUE`). **No default admin password or account is seeded.**
+4. `supabase/migrations/004_security_rls_and_atomic_bootstrap.sql` — Idempotent security upgrade migration for existing databases that replaces any broad `FOR ALL` policies with separated `SELECT`/`INSERT`/`UPDATE`/`DELETE` policies and installs `public.claim_first_super_admin()`.
 
 ### Supabase Auth Settings Checklist
 - Enable **Email/Password** provider in Supabase Authentication.
@@ -44,15 +45,17 @@ No default admin username or password exists in the codebase or migrations, and 
 2. Navigate to `/admin/setup` (or `/admin/login`).
 3. Because zero active admins exist yet, `/admin/setup` presents the protected **First-Time Super Admin Setup** form.
 4. Enter your Full Name, Email, strong password (10+ characters), and the `ADMIN_BOOTSTRAP_SECRET`. (Alternatively, run `npm run bootstrap:admin` from the server CLI.)
-5. Once claimed, `/api/admin/auth/setup-first-admin` and `/admin/setup` permanently lock (`403`/`409`) and all future logins use `/admin/login`. Additional staff accounts (`Admin`, `Operations Manager`, `Vendor Manager`, `Support Manager`) are invited and managed by a Super Admin in **Admin Users** (`/admin/users`).
+5. Registration uses an atomic PostgreSQL transaction advisory lock (`claim_first_super_admin`) plus a server-side lock so concurrent requests cannot race. Once claimed, `/api/admin/auth/setup-first-admin` and `/admin/setup` permanently lock (`403`/`409`) and all future logins use `/admin/login`. Additional staff accounts (`Admin`, `Operations Manager`, `Vendor Manager`, `Support Manager`) are invited and managed by a Super Admin in **Admin Users** (`/admin/users`).
+
+> For detailed Supabase dashboard screenshots/checklist and SQL database verification queries, see [ADMIN_SETUP_GUIDE.md](./ADMIN_SETUP_GUIDE.md).
 
 ---
 
-## 4. Storage Mode Notes
+## 4. Storage & Persistence Mode Notes
 
-- **With `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` set**: Uploaded gallery images and private work-order/vendor files are stored in Supabase Storage buckets, and Supabase Auth handles JWT authentication against `profiles` & `admin_roles`.
-- **Preview / Self-Hosted Node Mode**: When Supabase env vars are absent, `server.ts` persists structured platform state atomically to `data/platform-db.json` and stores uploaded attachments in `uploads/` (with private buckets gated behind authenticated `/api/admin/files/:bucket/:filename` and path traversal confinement).
-- Note: On serverless platforms with ephemeral filesystems (like Vercel), always configure Supabase environment variables for durable multi-instance persistence.
+- **Unified Supabase Persistence (`SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` set)**: All public submissions (`/api/public/*`), admin operations (`/api/admin/*`), CMS content, RBAC profiles, audit logs, and uploaded files use Supabase PostgreSQL and Supabase Storage as the single source of truth.
+- **Production Enforcement**: When `NODE_ENV=production` or deployed on Vercel (`VERCEL=1`), local JSON storage (`data/platform-db.json`) and local `uploads/` disk writes are **strictly disabled**. The server refuses to start or fall back to local JSON without valid `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
+- **Local Development Only**: When running locally in development (`NODE_ENV !== 'production'`) without Supabase env vars, `server.ts` stores development state in `data/platform-db.json` and `uploads/`.
 
 ---
 

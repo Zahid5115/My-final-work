@@ -153,7 +153,11 @@ export const AdminLoginPage: React.FC<{ mode?: 'login' | 'setup' | 'forgot' | 'r
             Back to Public Site
           </Link>
           <span className="font-mono-tabular text-[11px] font-semibold text-lime-200/75">
-            {authStatus?.authMode === 'supabase' ? 'Supabase Auth + RLS' : 'Local Server Mode'}
+            {authStatus?.authMode === 'supabase'
+              ? 'Supabase Auth + RLS'
+              : authStatus?.authMode === 'unconfigured'
+              ? 'Supabase Required (Production)'
+              : 'Local Dev Mode'}
           </span>
         </div>
 
@@ -197,6 +201,13 @@ export const AdminLoginPage: React.FC<{ mode?: 'login' | 'setup' | 'forgot' | 'r
                 <code className="font-mono">https://...</code> URL (example:{' '}
                 <code className="font-mono">https://your-project-ref.supabase.co</code>). The portal is running safely in Local Server Mode until updated.
               </p>
+            </div>
+          )}
+
+          {authStatus?.productionConfigError && (
+            <div className="mt-4 rounded-xl border border-red-300 bg-red-50 p-3.5 text-xs text-red-950 dark:border-red-400/30 dark:bg-red-950/30 dark:text-red-100">
+              <p className="font-bold">Production Database Configuration Required</p>
+              <p className="mt-1 leading-relaxed opacity-90">{authStatus.productionConfigError}</p>
             </div>
           )}
 

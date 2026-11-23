@@ -10,13 +10,14 @@ import type { AdminUserProfile, PermissionKey } from '../../types/platform';
 
 interface AuthStatusResponse {
   needsFirstAdminSetup: boolean;
-  authMode: 'supabase' | 'local';
+  authMode: 'supabase' | 'local' | 'unconfigured';
   emailConfigured: boolean;
   bootstrapConfigured: boolean;
   requiresBootstrapSecret: boolean;
   requiresBootstrapEmail: boolean;
   supabaseUrlInvalid?: boolean;
   supabaseWarning?: string;
+  productionConfigError?: string;
 }
 
 interface AdminAuthContextValue {

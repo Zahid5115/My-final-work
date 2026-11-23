@@ -34,6 +34,7 @@ import {
   GOOGLE_REVIEWS,
   SAMPLE_WORK_ORDERS
 } from '../src/data/servicesData.ts';
+import { isProductionEnvironment } from './supabaseAdmin.ts';
 
 export interface StoredAdminUser {
   id: string;
@@ -521,6 +522,11 @@ function ensureDirectories(): void {
 }
 
 export function getDbState(): PlatformDbState {
+  if (isProductionEnvironment()) {
+    throw new Error(
+      'Local JSON persistence (data/platform-db.json) is disabled in production. Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
+    );
+  }
   if (cachedState) return cachedState;
   ensureDirectories();
   if (fs.existsSync(DB_FILE)) {
@@ -541,6 +547,11 @@ export function getDbState(): PlatformDbState {
 }
 
 export function saveDbState(state: PlatformDbState): void {
+  if (isProductionEnvironment()) {
+    throw new Error(
+      'Local JSON persistence (data/platform-db.json) is disabled in production. Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
+    );
+  }
   ensureDirectories();
   cachedState = state;
   const tmpFile = `${DB_FILE}.tmp`;
