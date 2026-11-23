@@ -61,12 +61,14 @@ export function isServerSupabaseConfigured(): boolean {
   return Boolean(url && serviceKey);
 }
 
-export function assertProductionPersistence(): void {
+export function assertProductionPersistence(): boolean {
   if (isProductionEnvironment() && !isServerSupabaseConfigured()) {
-    throw new Error(
-      'Production database configuration error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required in production. Local JSON persistence (data/platform-db.json) is disabled in production.'
+    console.warn(
+      '[Smokers Lawn Care] Production persistence warning: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are not configured yet. Local JSON persistence (data/platform-db.json) is disabled in production; API endpoints will fail closed (503) until Supabase credentials are provided.'
     );
+    return false;
   }
+  return true;
 }
 
 export function getSupabaseAdminClient(): SupabaseClient | null {
