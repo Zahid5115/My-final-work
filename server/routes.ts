@@ -29,6 +29,10 @@ export function createApiRouter(): express.Router {
   registerOperationsRoutes(router);
   registerCmsAndSystemRoutes(router);
 
+  router.use((req: Request, res: Response) => {
+    res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.originalUrl}` });
+  });
+
   router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     const message = err instanceof Error ? err.message : 'Internal server error.';
     if (!res.headersSent) {

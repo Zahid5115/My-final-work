@@ -3,8 +3,10 @@ import express from 'express';
 import { createApiRouter } from './routes.ts';
 import { securityHeadersMiddleware } from './security.ts';
 
-export function createApiApp(options: { includeErrorHandler?: boolean } = {}): express.Express {
-  const { includeErrorHandler = true } = options;
+export function createApiApp(
+  options: { includeErrorHandler?: boolean; mountRootApi?: boolean } = {}
+): express.Express {
+  const { includeErrorHandler = true, mountRootApi = false } = options;
   const app = express();
 
   app.set('trust proxy', 1);
@@ -12,7 +14,11 @@ export function createApiApp(options: { includeErrorHandler?: boolean } = {}): e
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
-  app.use('/api', createApiRouter());
+  const apiRouter = createApiRouter();
+  app.use('/api', apiRouter);
+  if (mountRootApi) {
+    app.use('/', apiRouter);
+  }
 
   if (includeErrorHandler) {
     app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

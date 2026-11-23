@@ -3,11 +3,14 @@ import path from 'node:path';
 import { build } from 'esbuild';
 
 const apiDir = path.resolve(process.cwd(), 'api');
-const outFile = path.join(apiDir, '_handler.js');
-const legacyMjs = path.join(apiDir, 'index.mjs');
+const outFile = path.join(apiDir, 'app.js');
 fs.mkdirSync(apiDir, { recursive: true });
-if (fs.existsSync(legacyMjs)) {
-  fs.unlinkSync(legacyMjs);
+
+for (const legacy of ['index.mjs', 'index.js', '_handler.js', '[...path].js']) {
+  const legacyPath = path.join(apiDir, legacy);
+  if (fs.existsSync(legacyPath)) {
+    fs.unlinkSync(legacyPath);
+  }
 }
 
 await build({

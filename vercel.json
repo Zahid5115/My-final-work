@@ -5,7 +5,15 @@
   "framework": "vite",
   "rewrites": [
     {
-      "source": "/((?!api(?:/|$)).*)",
+      "source": "/api/(.*)",
+      "destination": "/api/app?__vercel_api_path=$1"
+    },
+    {
+      "source": "/api",
+      "destination": "/api/app"
+    },
+    {
+      "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
   ]
